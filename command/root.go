@@ -390,6 +390,28 @@ func ExpandAlias(args []string) ([]string, error) {
 
 	expansion, ok := aliases.Get(args[1])
 	if ok {
+		if strings.HasPrefix(expansion, "!") {
+			shellArgs := []string{"-c", expansion[1:]}
+			if len(args[2:]) > 0 {
+				shellArgs = append(shellArgs, "--")
+				for _, a := range args[2:] {
+					shellArgs = append(shellArgs, a)
+				}
+			}
+			externalCmd := exec.Command("sh", shellArgs...)
+			externalCmd.Stderr = os.Stderr
+			externalCmd.Stdout = os.Stdout
+			externalCmd.Stdin = os.Stdin
+			preparedCmd := run.PrepareCmd(externalCmd)
+
+			err := preparedCmd.Run()
+			if err != nil {
+				return nil, fmt.Errorf("failed to run external command: %w", err)
+			}
+
+			return nil, nil
+		}
+
 		extraArgs := []string{}
 		for i, a := range args[2:] {
 			if !strings.Contains(expansion, "$") {
@@ -403,44 +425,13 @@ func ExpandAlias(args []string) ([]string, error) {
 			return empty, fmt.Errorf("not enough arguments for alias: %s", expansion)
 		}
 
-		isExternal := strings.HasPrefix(expansion, "!")
-
-		if !isExternal {
-
-			newArgs, err := shlex.Split(expansion)
-			if err != nil {
-				return nil, err
-			}
-
-			return append(newArgs, extraArgs...), nil
-		}
-
-		defaultShell := "sh"
-		if os.Getenv("SHELL") != "" {
-			defaultShell = os.Getenv("SHELL")
-		}
-
-		for _, arg := range extraArgs {
-			if !strings.HasPrefix(arg, "-") {
-				expansion += fmt.Sprintf(" %q ", arg)
-			} else {
-				expansion += fmt.Sprintf(" %s ", arg)
-			}
-		}
-
-		shellArgs := []string{"-c", expansion[1:]}
-		externalCmd := exec.Command(defaultShell, shellArgs...)
-		externalCmd.Stderr = os.Stderr
-		externalCmd.Stdout = os.Stdout
-		externalCmd.Stdin = os.Stdin
-		preparedCmd := run.PrepareCmd(externalCmd)
-
-		err := preparedCmd.Run()
+		newArgs, err := shlex.Split(expansion)
 		if err != nil {
-			return nil, fmt.Errorf("failed to run external command: %w", err)
+			return nil, err
 		}
 
-		return nil, nil
+		return append(newArgs, extraArgs...), nil
+
 	}
 
 	return args[1:], nil

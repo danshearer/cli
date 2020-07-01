@@ -3,7 +3,6 @@ package command
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 
@@ -178,48 +177,7 @@ aliases:
 
 }
 
-func TestExpandAlias_external_default_shell(t *testing.T) {
-	cfg := `---
-aliases:
-  co: pr checkout
-  il: issue list --author="$1" --label="$2"
-  ia: issue list --author="$1" --assignee="$1"
-  ig: '!gh issue list --label=$1 | grep'
-`
-	initBlankContext(cfg, "OWNER/REPO", "trunk")
-
-	// TODO respects SHELL
-	// TODO unshlexes as best it can
-	// TODO additional args passed
-	// TODO placeholder args set
-	cs, teardown := test.InitCmdStubber()
-	defer teardown()
-	cs.Stub("")
-
-	shell := os.Getenv("SHELL")
-	defer func() {
-		if shell != "" {
-			_ = os.Setenv("SHELL", shell)
-		}
-	}()
-	os.Unsetenv("SHELL")
-
-	_, err := ExpandAlias([]string{"gh", "ig", "bug", "foo"})
-
-	if err != nil {
-		t.Fatalf("unexpected error: %s", err)
-	}
-
-	assert.Equal(t, 1, len(cs.Calls))
-
-	fmt.Printf("DEBUG %#v\n", cs.Calls[0])
-
-	expected := []string{"sh", "-c", "gh issue list --label=bug | grep \"foo\" "}
-
-	assert.Equal(t, expected, cs.Calls[0].Args)
-}
-
-func TestExpandAlias_external_respects_shell(t *testing.T) {
+func TestExpandAlias_external(t *testing.T) {
 	cfg := `---
 aliases:
   co: pr checkout
@@ -233,14 +191,6 @@ aliases:
 	defer teardown()
 	cs.Stub("")
 
-	shell := os.Getenv("SHELL")
-	defer func() {
-		if shell != "" {
-			_ = os.Setenv("SHELL", shell)
-		}
-	}()
-	os.Setenv("SHELL", "/usr/bin/fish")
-
 	_, err := ExpandAlias([]string{"gh", "ig", "bug", "foo"})
 
 	if err != nil {
@@ -251,7 +201,7 @@ aliases:
 
 	fmt.Printf("DEBUG %#v\n", cs.Calls[0])
 
-	expected := []string{"/usr/bin/fish", "-c", "gh issue list --label=bug | grep \"foo\" "}
+	expected := []string{"sh", "-c", "gh issue list --label=$1 | grep", "--", "bug", "foo"}
 
 	assert.Equal(t, expected, cs.Calls[0].Args)
 }
