@@ -394,9 +394,7 @@ func ExpandAlias(args []string) ([]string, error) {
 			shellArgs := []string{"-c", expansion[1:]}
 			if len(args[2:]) > 0 {
 				shellArgs = append(shellArgs, "--")
-				for _, a := range args[2:] {
-					shellArgs = append(shellArgs, a)
-				}
+				shellArgs = append(shellArgs, args[2:]...)
 			}
 			externalCmd := exec.Command("sh", shellArgs...)
 			externalCmd.Stderr = os.Stderr
