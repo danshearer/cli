@@ -17,7 +17,7 @@ func init() {
 	aliasCmd.AddCommand(aliasListCmd)
 	aliasCmd.AddCommand(aliasDeleteCmd)
 
-	aliasSetCmd.Flags().BoolP("shell", "s", false, "Whether the alias should be passed to a shell")
+	aliasSetCmd.Flags().BoolP("shell", "s", false, "Declare an alias to be passed through a shell interpreter")
 }
 
 var aliasCmd = &cobra.Command{
@@ -40,8 +40,9 @@ var aliasSetCmd = &cobra.Command{
 	includes positional placeholders such as '$1', '$2', etc., any extra arguments
 	that follow the invocation of an alias will be inserted appropriately.
 
-	If --shell is specified, the alias will be run through a shell. This allows you to compose
-	commands with | or redirect output with >.
+	If '--shell' is specified, the alias will be run through a shell interpreter (sh). This allows you
+	to compose commands with "|" or redirect output with ">". Note that extra arguments are not passed
+	to shell-interpreted aliases; only placeholders ("$1", "$2", etc) are supported.
 
 	Quotes must always be used when defining a command as in the examples.`),
 	Example: heredoc.Doc(`
@@ -55,7 +56,7 @@ var aliasSetCmd = &cobra.Command{
 	$ gh epicsBy vilmibm
 	#=> gh issue list --author="vilmibm" --label="epic"
 
-	$ gh alias set --shell igrep 'gh issue list --label="$1" | grep'
+	$ gh alias set --shell igrep 'gh issue list --label="$1" | grep $2'
 	$ gh igrep epic foo
 	#=> gh issue list --label="epic" | grep "foo"`),
 	Args: cobra.ExactArgs(2),
