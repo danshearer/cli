@@ -47,6 +47,7 @@ func main() {
 		}
 
 		if expandedArgs == nil && err == nil {
+			// It was an external alias; we ran it and are now done.
 			os.Exit(0)
 		}
 

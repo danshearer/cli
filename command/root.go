@@ -372,20 +372,19 @@ func determineEditor(cmd *cobra.Command) (string, error) {
 }
 
 func ExpandAlias(args []string) ([]string, error) {
-	empty := []string{}
 	if len(args) < 2 {
 		// the command is lacking a subcommand
-		return empty, nil
+		return []string{}, nil
 	}
 
 	ctx := initContext()
 	cfg, err := ctx.Config()
 	if err != nil {
-		return empty, err
+		return nil, err
 	}
 	aliases, err := cfg.Aliases()
 	if err != nil {
-		return empty, err
+		return nil, err
 	}
 
 	expansion, ok := aliases.Get(args[1])
@@ -420,7 +419,7 @@ func ExpandAlias(args []string) ([]string, error) {
 		}
 		lingeringRE := regexp.MustCompile(`\$\d`)
 		if lingeringRE.MatchString(expansion) {
-			return empty, fmt.Errorf("not enough arguments for alias: %s", expansion)
+			return nil, fmt.Errorf("not enough arguments for alias: %s", expansion)
 		}
 
 		newArgs, err := shlex.Split(expansion)
