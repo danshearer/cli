@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"runtime/debug"
 	"strings"
 
@@ -391,11 +392,16 @@ func ExpandAlias(args []string) ([]string, error) {
 	if ok {
 		if strings.HasPrefix(expansion, "!") {
 			shellArgs := []string{"-c", expansion[1:]}
+			shellCmd := "sh"
+			if runtime.GOOS == "windows" {
+				shellCmd = "powershell"
+				shellArgs = []string{"-Command", expansion[1:]}
+			}
 			if len(args[2:]) > 0 {
 				shellArgs = append(shellArgs, "--")
 				shellArgs = append(shellArgs, args[2:]...)
 			}
-			externalCmd := exec.Command("sh", shellArgs...)
+			externalCmd := exec.Command(shellCmd, shellArgs...)
 			externalCmd.Stderr = os.Stderr
 			externalCmd.Stdout = os.Stdout
 			externalCmd.Stdin = os.Stdin
