@@ -1,8 +1,11 @@
-package api
+package create
 
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
+
+	"github.com/cli/cli/api"
 )
 
 // Gist represents a GitHub's gist.
@@ -19,10 +22,7 @@ type GistFile struct {
 	Content string `json:"content,omitempty"`
 }
 
-// Create a gist for authenticated user.
-//
-// GitHub API docs: https://developer.github.com/v3/gists/#create-a-gist
-func GistCreate(client *Client, description string, public bool, files map[string]string) (*Gist, error) {
+func apiCreate(httpClient *http.Client, hostname string, description string, public bool, files map[string]string) (*Gist, error) {
 	gistFiles := map[GistFilename]GistFile{}
 
 	for filename, content := range files {
@@ -43,7 +43,8 @@ func GistCreate(client *Client, description string, public bool, files map[strin
 	}
 	requestBody := bytes.NewReader(requestByte)
 
-	err = client.REST("POST", path, requestBody, &result)
+	apiClient := api.NewClientFromHTTP(httpClient)
+	err = apiClient.REST(hostname, "POST", path, requestBody, &result)
 	if err != nil {
 		return nil, err
 	}

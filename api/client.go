@@ -11,7 +11,9 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/cli/cli/internal/ghinstance"
 	"github.com/henvic/httpretty"
+	"github.com/shurcooL/graphql"
 )
 
 // ClientOption represents an argument to NewClient
@@ -32,29 +34,31 @@ func NewClient(opts ...ClientOption) *Client {
 	return client
 }
 
+// NewClientFromHTTP takes in an http.Client instance
+func NewClientFromHTTP(httpClient *http.Client) *Client {
+	client := &Client{http: httpClient}
+	return client
+}
+
 // AddHeader turns a RoundTripper into one that adds a request header
 func AddHeader(name, value string) ClientOption {
 	return func(tr http.RoundTripper) http.RoundTripper {
 		return &funcTripper{roundTrip: func(req *http.Request) (*http.Response, error) {
-			// prevent the token from leaking to non-GitHub hosts
-			// TODO: GHE support
-			if !strings.EqualFold(name, "Authorization") || strings.HasSuffix(req.URL.Hostname(), ".github.com") {
-				req.Header.Add(name, value)
-			}
+			req.Header.Add(name, value)
 			return tr.RoundTrip(req)
 		}}
 	}
 }
 
 // AddHeaderFunc is an AddHeader that gets the string value from a function
-func AddHeaderFunc(name string, value func() string) ClientOption {
+func AddHeaderFunc(name string, getValue func(*http.Request) (string, error)) ClientOption {
 	return func(tr http.RoundTripper) http.RoundTripper {
 		return &funcTripper{roundTrip: func(req *http.Request) (*http.Response, error) {
-			// prevent the token from leaking to non-GitHub hosts
-			// TODO: GHE support
-			if !strings.EqualFold(name, "Authorization") || strings.HasSuffix(req.URL.Hostname(), ".github.com") {
-				req.Header.Add(name, value())
+			value, err := getValue(req)
+			if err != nil {
+				return nil, err
 			}
+			req.Header.Add(name, value)
 			return tr.RoundTrip(req)
 		}}
 	}
@@ -88,8 +92,18 @@ func ReplaceTripper(tr http.RoundTripper) ClientOption {
 
 var issuedScopesWarning bool
 
+const (
+	httpOAuthAppID  = "X-Oauth-Client-Id"
+	httpOAuthScopes = "X-Oauth-Scopes"
+)
+
 // CheckScopes checks whether an OAuth scope is present in a response
 func CheckScopes(wantedScope string, cb func(string) error) ClientOption {
+	wantedCandidates := []string{wantedScope}
+	if strings.HasPrefix(wantedScope, "read:") {
+		wantedCandidates = append(wantedCandidates, "admin:"+strings.TrimPrefix(wantedScope, "read:"))
+	}
+
 	return func(tr http.RoundTripper) http.RoundTripper {
 		return &funcTripper{roundTrip: func(req *http.Request) (*http.Response, error) {
 			res, err := tr.RoundTrip(req)
@@ -97,14 +111,22 @@ func CheckScopes(wantedScope string, cb func(string) error) ClientOption {
 				return res, err
 			}
 
-			appID := res.Header.Get("X-Oauth-Client-Id")
-			hasScopes := strings.Split(res.Header.Get("X-Oauth-Scopes"), ",")
+			_, hasHeader := res.Header[httpOAuthAppID]
+			if !hasHeader {
+				return res, nil
+			}
+
+			appID := res.Header.Get(httpOAuthAppID)
+			hasScopes := strings.Split(res.Header.Get(httpOAuthScopes), ",")
 
 			hasWanted := false
+		outer:
 			for _, s := range hasScopes {
-				if wantedScope == strings.TrimSpace(s) {
-					hasWanted = true
-					break
+				for _, w := range wantedCandidates {
+					if w == strings.TrimSpace(s) {
+						hasWanted = true
+						break outer
+					}
 				}
 			}
 
@@ -160,9 +182,10 @@ func (gr GraphQLErrorResponse) Error() string {
 
 // HTTPError is an error returned by a failed API call
 type HTTPError struct {
-	StatusCode int
-	RequestURL *url.URL
-	Message    string
+	StatusCode  int
+	RequestURL  *url.URL
+	Message     string
+	OAuthScopes string
 }
 
 func (err HTTPError) Error() string {
@@ -186,7 +209,13 @@ func (c Client) HasScopes(wantedScopes ...string) (bool, string, error) {
 	if err != nil {
 		return false, "", err
 	}
-	defer res.Body.Close()
+
+	defer func() {
+		// Ensure the response body is fully read and closed
+		// before we reconnect, so that we reuse the same TCPconnection.
+		_, _ = io.Copy(ioutil.Discard, res.Body)
+		res.Body.Close()
+	}()
 
 	if res.StatusCode != 200 {
 		return false, "", handleHTTPError(res)
@@ -212,14 +241,13 @@ func (c Client) HasScopes(wantedScopes ...string) (bool, string, error) {
 }
 
 // GraphQL performs a GraphQL request and parses the response
-func (c Client) GraphQL(query string, variables map[string]interface{}, data interface{}) error {
-	url := "https://api.github.com/graphql"
+func (c Client) GraphQL(hostname string, query string, variables map[string]interface{}, data interface{}) error {
 	reqBody, err := json.Marshal(map[string]interface{}{"query": query, "variables": variables})
 	if err != nil {
 		return err
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(reqBody))
+	req, err := http.NewRequest("POST", ghinstance.GraphQLEndpoint(hostname), bytes.NewBuffer(reqBody))
 	if err != nil {
 		return err
 	}
@@ -235,9 +263,13 @@ func (c Client) GraphQL(query string, variables map[string]interface{}, data int
 	return handleResponse(resp, data)
 }
 
+func graphQLClient(h *http.Client, hostname string) *graphql.Client {
+	return graphql.NewClient(ghinstance.GraphQLEndpoint(hostname), h)
+}
+
 // REST performs a REST request and parses the response.
-func (c Client) REST(method string, p string, body io.Reader, data interface{}) error {
-	url := "https://api.github.com/" + p
+func (c Client) REST(hostname string, method string, p string, body io.Reader, data interface{}) error {
+	url := ghinstance.RESTPrefix(hostname) + p
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		return err
@@ -299,8 +331,9 @@ func handleResponse(resp *http.Response, data interface{}) error {
 
 func handleHTTPError(resp *http.Response) error {
 	httpError := HTTPError{
-		StatusCode: resp.StatusCode,
-		RequestURL: resp.Request.URL,
+		StatusCode:  resp.StatusCode,
+		RequestURL:  resp.Request.URL,
+		OAuthScopes: resp.Header.Get("X-Oauth-Scopes"),
 	}
 
 	body, err := ioutil.ReadAll(resp.Body)

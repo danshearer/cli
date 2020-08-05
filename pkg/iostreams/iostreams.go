@@ -16,10 +16,62 @@ type IOStreams struct {
 	ErrOut io.Writer
 
 	colorEnabled bool
+
+	stdinTTYOverride  bool
+	stdinIsTTY        bool
+	stdoutTTYOverride bool
+	stdoutIsTTY       bool
+	stderrTTYOverride bool
+	stderrIsTTY       bool
 }
 
 func (s *IOStreams) ColorEnabled() bool {
 	return s.colorEnabled
+}
+
+func (s *IOStreams) SetStdinTTY(isTTY bool) {
+	s.stdinTTYOverride = true
+	s.stdinIsTTY = isTTY
+}
+
+func (s *IOStreams) IsStdinTTY() bool {
+	if s.stdinTTYOverride {
+		return s.stdinIsTTY
+	}
+	if stdin, ok := s.In.(*os.File); ok {
+		return isTerminal(stdin)
+	}
+	return false
+}
+
+func (s *IOStreams) SetStdoutTTY(isTTY bool) {
+	s.stdoutTTYOverride = true
+	s.stdoutIsTTY = isTTY
+}
+
+func (s *IOStreams) IsStdoutTTY() bool {
+	if s.stdoutTTYOverride {
+		return s.stdoutIsTTY
+	}
+	if stdout, ok := s.Out.(*os.File); ok {
+		return isTerminal(stdout)
+	}
+	return false
+}
+
+func (s *IOStreams) SetStderrTTY(isTTY bool) {
+	s.stderrTTYOverride = true
+	s.stderrIsTTY = isTTY
+}
+
+func (s *IOStreams) IsStderrTTY() bool {
+	if s.stderrTTYOverride {
+		return s.stderrIsTTY
+	}
+	if stderr, ok := s.ErrOut.(*os.File); ok {
+		return isTerminal(stderr)
+	}
+	return false
 }
 
 func System() *IOStreams {

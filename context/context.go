@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/cli/cli/api"
 	"github.com/cli/cli/git"
@@ -12,13 +13,8 @@ import (
 	"github.com/cli/cli/internal/ghrepo"
 )
 
-// TODO these are sprinkled across command, context, config, and ghrepo
-const defaultHostname = "github.com"
-
 // Context represents the interface for querying information about the current environment
 type Context interface {
-	AuthToken() (string, error)
-	SetAuthToken(string)
 	Branch() (string, error)
 	SetBranch(string)
 	Remotes() (Remotes, error)
@@ -31,21 +27,30 @@ type Context interface {
 // unusually large number of git remotes
 const maxRemotesForLookup = 5
 
+// ResolveRemotesToRepos takes in a list of git remotes and fetches more information about the repositories they map to.
+// Only the git remotes belonging to the same hostname are ever looked up; all others are ignored.
 func ResolveRemotesToRepos(remotes Remotes, client *api.Client, base string) (ResolvedRemotes, error) {
 	sort.Stable(remotes)
-	lenRemotesForLookup := len(remotes)
-	if lenRemotesForLookup > maxRemotesForLookup {
-		lenRemotesForLookup = maxRemotesForLookup
-	}
 
 	hasBaseOverride := base != ""
 	baseOverride, _ := ghrepo.FromFullName(base)
 	foundBaseOverride := false
-	repos := make([]ghrepo.Interface, 0, lenRemotesForLookup)
-	for _, r := range remotes[:lenRemotesForLookup] {
+
+	var hostname string
+	var repos []ghrepo.Interface
+	for i, r := range remotes {
+		if i == 0 {
+			hostname = r.RepoHost()
+		} else if !strings.EqualFold(r.RepoHost(), hostname) {
+			// ignore all remotes for a hostname different to that of the 1st remote
+			continue
+		}
 		repos = append(repos, r)
 		if ghrepo.IsSame(r, baseOverride) {
 			foundBaseOverride = true
+		}
+		if len(repos) == maxRemotesForLookup {
+			break
 		}
 	}
 	if hasBaseOverride && !foundBaseOverride {
@@ -154,11 +159,10 @@ func New() Context {
 
 // A Context implementation that queries the filesystem
 type fsContext struct {
-	config    config.Config
-	remotes   Remotes
-	branch    string
-	baseRepo  ghrepo.Interface
-	authToken string
+	config   config.Config
+	remotes  Remotes
+	branch   string
+	baseRepo ghrepo.Interface
 }
 
 func (c *fsContext) Config() (config.Config, error) {
@@ -170,35 +174,8 @@ func (c *fsContext) Config() (config.Config, error) {
 			return nil, err
 		}
 		c.config = cfg
-		c.authToken = ""
 	}
 	return c.config, nil
-}
-
-func (c *fsContext) AuthToken() (string, error) {
-	if c.authToken != "" {
-		return c.authToken, nil
-	}
-
-	cfg, err := c.Config()
-	if err != nil {
-		return "", err
-	}
-
-	var notFound *config.NotFoundError
-	token, err := cfg.Get(defaultHostname, "oauth_token")
-	if token == "" || errors.As(err, &notFound) {
-		// interactive OAuth flow
-		return config.AuthFlowWithConfig(cfg, defaultHostname, "Notice: authentication required")
-	} else if err != nil {
-		return "", err
-	}
-
-	return token, nil
-}
-
-func (c *fsContext) SetAuthToken(t string) {
-	c.authToken = t
 }
 
 func (c *fsContext) Branch() (string, error) {
@@ -230,7 +207,23 @@ func (c *fsContext) Remotes() (Remotes, error) {
 		}
 
 		sshTranslate := git.ParseSSHConfig().Translator()
-		c.remotes = translateRemotes(gitRemotes, sshTranslate)
+		resolvedRemotes := translateRemotes(gitRemotes, sshTranslate)
+
+		// determine hostname by looking at the "main" remote
+		var hostname string
+		if mainRemote, err := resolvedRemotes.FindByName("upstream", "github", "origin", "*"); err == nil {
+			hostname = mainRemote.RepoHost()
+		}
+
+		// filter the rest of the remotes to just that hostname
+		filteredRemotes := Remotes{}
+		for _, r := range resolvedRemotes {
+			if r.RepoHost() != hostname {
+				continue
+			}
+			filteredRemotes = append(filteredRemotes, r)
+		}
+		c.remotes = filteredRemotes
 	}
 
 	if len(c.remotes) == 0 {

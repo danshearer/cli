@@ -16,6 +16,7 @@ import (
 	"github.com/cli/cli/git"
 	"github.com/cli/cli/internal/ghrepo"
 	"github.com/cli/cli/pkg/cmdutil"
+	"github.com/cli/cli/pkg/prompt"
 	"github.com/cli/cli/pkg/text"
 	"github.com/cli/cli/utils"
 	"github.com/spf13/cobra"
@@ -26,7 +27,6 @@ func init() {
 	prCmd.PersistentFlags().StringP("repo", "R", "", "Select another repository using the `OWNER/REPO` format")
 
 	RootCmd.AddCommand(prCmd)
-	prCmd.AddCommand(prCheckoutCmd)
 	prCmd.AddCommand(prCreateCmd)
 	prCmd.AddCommand(prStatusCmd)
 	prCmd.AddCommand(prCloseCmd)
@@ -39,10 +39,11 @@ func init() {
 	prCmd.AddCommand(prReadyCmd)
 
 	prCmd.AddCommand(prListCmd)
+	prListCmd.Flags().BoolP("web", "w", false, "Open the browser to list the pull request(s)")
 	prListCmd.Flags().IntP("limit", "L", 30, "Maximum number of items to fetch")
 	prListCmd.Flags().StringP("state", "s", "open", "Filter by state: {open|closed|merged|all}")
 	prListCmd.Flags().StringP("base", "B", "", "Filter by base branch")
-	prListCmd.Flags().StringSliceP("label", "l", nil, "Filter by label")
+	prListCmd.Flags().StringSliceP("label", "l", nil, "Filter by labels")
 	prListCmd.Flags().StringP("assignee", "a", "", "Filter by assignee")
 
 	prCmd.AddCommand(prViewCmd)
@@ -73,6 +74,7 @@ var prListCmd = &cobra.Command{
 	$ gh pr list --limit 999
 	$ gh pr list --state closed
 	$ gh pr list --label "priority 1" --label "bug"
+	$ gh pr list --web
 	`),
 	RunE: prList,
 }
@@ -108,8 +110,14 @@ var prReopenCmd = &cobra.Command{
 var prMergeCmd = &cobra.Command{
 	Use:   "merge [<number> | <url> | <branch>]",
 	Short: "Merge a pull request",
-	Args:  cobra.MaximumNArgs(1),
-	RunE:  prMerge,
+	Long: heredoc.Doc(`
+	Merge a pull request on GitHub.
+
+	By default, the head branch of the pull request will get deleted on both remote and local repositories.
+	To retain the branch, use '--delete-branch=false'.
+	`),
+	Args: cobra.MaximumNArgs(1),
+	RunE: prMerge,
 }
 var prReadyCmd = &cobra.Command{
 	Use:   "ready [<number> | <url> | <branch>]",
@@ -196,6 +204,11 @@ func prList(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	web, err := cmd.Flags().GetBool("web")
+	if err != nil {
+		return err
+	}
+
 	limit, err := cmd.Flags().GetInt("limit")
 	if err != nil {
 		return err
@@ -221,6 +234,22 @@ func prList(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	if web {
+		prListURL := ghrepo.GenerateRepoURL(baseRepo, "pulls")
+		openURL, err := listURLWithQuery(prListURL, filterOptions{
+			entity:     "pr",
+			state:      state,
+			assignee:   assignee,
+			labels:     labels,
+			baseBranch: baseBranch,
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "Opening %s in your browser.\n", utils.DisplayURL(openURL))
+		return utils.OpenInBrowser(openURL)
+	}
+
 	var graphqlState []string
 	switch state {
 	case "open":
@@ -236,8 +265,6 @@ func prList(cmd *cobra.Command, args []string) error {
 	}
 
 	params := map[string]interface{}{
-		"owner": baseRepo.RepoOwner(),
-		"repo":  baseRepo.RepoName(),
 		"state": graphqlState,
 	}
 	if len(labels) > 0 {
@@ -250,7 +277,7 @@ func prList(cmd *cobra.Command, args []string) error {
 		params["assignee"] = assignee
 	}
 
-	listResult, err := api.PullRequestList(apiClient, params, limit)
+	listResult, err := api.PullRequestList(apiClient, baseRepo, params, limit)
 	if err != nil {
 		return err
 	}
@@ -264,8 +291,9 @@ func prList(cmd *cobra.Command, args []string) error {
 	})
 
 	title := listHeader(ghrepo.FullName(baseRepo), "pull request", len(listResult.PullRequests), listResult.TotalCount, hasFilters)
-	// TODO: avoid printing header if piped to a script
-	fmt.Fprintf(colorableErr(cmd), "\n%s\n\n", title)
+	if connectedToTerminal(cmd) {
+		fmt.Fprintf(colorableErr(cmd), "\n%s\n\n", title)
+	}
 
 	table := utils.NewTablePrinter(cmd.OutOrStdout())
 	for _, pr := range listResult.PullRequests {
@@ -276,6 +304,9 @@ func prList(cmd *cobra.Command, args []string) error {
 		table.AddField(prNum, nil, colorFuncForPR(pr))
 		table.AddField(replaceExcessiveWhitespace(pr.Title), nil, nil)
 		table.AddField(pr.HeadLabel(), nil, utils.Cyan)
+		if !table.IsTTY() {
+			table.AddField(prStateWithDraft(&pr), nil, nil)
+		}
 		table.EndRow()
 	}
 	err = table.Render()
@@ -335,11 +366,18 @@ func prView(cmd *cobra.Command, args []string) error {
 	openURL := pr.URL
 
 	if web {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Opening %s in your browser.\n", openURL)
+		if connectedToTerminal(cmd) {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Opening %s in your browser.\n", openURL)
+		}
 		return utils.OpenInBrowser(openURL)
 	}
-	out := colorableOut(cmd)
-	return printPrPreview(out, pr)
+
+	if connectedToTerminal(cmd) {
+		out := colorableOut(cmd)
+		return printHumanPrPreview(out, pr)
+	}
+
+	return printRawPrPreview(cmd.OutOrStdout(), pr)
 }
 
 func prClose(cmd *cobra.Command, args []string) error {
@@ -355,10 +393,10 @@ func prClose(cmd *cobra.Command, args []string) error {
 	}
 
 	if pr.State == "MERGED" {
-		err := fmt.Errorf("%s Pull request #%d can't be closed because it was already merged", utils.Red("!"), pr.Number)
+		err := fmt.Errorf("%s Pull request #%d (%s) can't be closed because it was already merged", utils.Red("!"), pr.Number, pr.Title)
 		return err
 	} else if pr.Closed {
-		fmt.Fprintf(colorableErr(cmd), "%s Pull request #%d is already closed\n", utils.Yellow("!"), pr.Number)
+		fmt.Fprintf(colorableErr(cmd), "%s Pull request #%d (%s) is already closed\n", utils.Yellow("!"), pr.Number, pr.Title)
 		return nil
 	}
 
@@ -367,7 +405,7 @@ func prClose(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("API call failed: %w", err)
 	}
 
-	fmt.Fprintf(colorableErr(cmd), "%s Closed pull request #%d\n", utils.Red("✔"), pr.Number)
+	fmt.Fprintf(colorableErr(cmd), "%s Closed pull request #%d (%s)\n", utils.Red("✔"), pr.Number, pr.Title)
 
 	return nil
 }
@@ -385,12 +423,12 @@ func prReopen(cmd *cobra.Command, args []string) error {
 	}
 
 	if pr.State == "MERGED" {
-		err := fmt.Errorf("%s Pull request #%d can't be reopened because it was already merged", utils.Red("!"), pr.Number)
+		err := fmt.Errorf("%s Pull request #%d (%s) can't be reopened because it was already merged", utils.Red("!"), pr.Number, pr.Title)
 		return err
 	}
 
 	if !pr.Closed {
-		fmt.Fprintf(colorableErr(cmd), "%s Pull request #%d is already open\n", utils.Yellow("!"), pr.Number)
+		fmt.Fprintf(colorableErr(cmd), "%s Pull request #%d (%s) is already open\n", utils.Yellow("!"), pr.Number, pr.Title)
 		return nil
 	}
 
@@ -399,7 +437,7 @@ func prReopen(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("API call failed: %w", err)
 	}
 
-	fmt.Fprintf(colorableErr(cmd), "%s Reopened pull request #%d\n", utils.Green("✔"), pr.Number)
+	fmt.Fprintf(colorableErr(cmd), "%s Reopened pull request #%d (%s)\n", utils.Green("✔"), pr.Number, pr.Title)
 
 	return nil
 }
@@ -417,13 +455,13 @@ func prMerge(cmd *cobra.Command, args []string) error {
 	}
 
 	if pr.Mergeable == "CONFLICTING" {
-		err := fmt.Errorf("%s Pull request #%d has conflicts and isn't mergeable ", utils.Red("!"), pr.Number)
+		err := fmt.Errorf("%s Pull request #%d (%s) has conflicts and isn't mergeable ", utils.Red("!"), pr.Number, pr.Title)
 		return err
 	} else if pr.Mergeable == "UNKNOWN" {
-		err := fmt.Errorf("%s Pull request #%d can't be merged right now; try again in a few seconds", utils.Red("!"), pr.Number)
+		err := fmt.Errorf("%s Pull request #%d (%s) can't be merged right now; try again in a few seconds", utils.Red("!"), pr.Number, pr.Title)
 		return err
 	} else if pr.State == "MERGED" {
-		err := fmt.Errorf("%s Pull request #%d was already merged", utils.Red("!"), pr.Number)
+		err := fmt.Errorf("%s Pull request #%d (%s) was already merged", utils.Red("!"), pr.Number, pr.Title)
 		return err
 	}
 
@@ -453,6 +491,9 @@ func prMerge(cmd *cobra.Command, args []string) error {
 	}
 
 	if enabledFlagCount == 0 {
+		if !connectedToTerminal(cmd) {
+			return errors.New("--merge, --rebase, or --squash required when not attached to a tty")
+		}
 		isInteractive = true
 	} else if enabledFlagCount > 1 {
 		return errors.New("expected exactly one of --merge, --rebase, or --squash to be true")
@@ -484,26 +525,26 @@ func prMerge(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("API call failed: %w", err)
 	}
 
-	fmt.Fprintf(colorableOut(cmd), "%s %s pull request #%d\n", utils.Magenta("✔"), action, pr.Number)
+	if connectedToTerminal(cmd) {
+		fmt.Fprintf(colorableErr(cmd), "%s %s pull request #%d (%s)\n", utils.Magenta("✔"), action, pr.Number, pr.Title)
+	}
 
 	if deleteBranch {
-		repo, err := api.GitHubRepo(apiClient, baseRepo)
-		if err != nil {
-			return err
-		}
-
-		currentBranch, err := ctx.Branch()
-		if err != nil {
-			return err
-		}
-
 		branchSwitchString := ""
 
 		if deleteLocalBranch && !crossRepoPR {
+			currentBranch, err := ctx.Branch()
+			if err != nil {
+				return err
+			}
+
 			var branchToSwitchTo string
 			if currentBranch == pr.HeadRefName {
-				branchToSwitchTo = repo.DefaultBranchRef.Name
-				err = git.CheckoutBranch(repo.DefaultBranchRef.Name)
+				branchToSwitchTo, err = api.RepoDefaultBranch(apiClient, baseRepo)
+				if err != nil {
+					return err
+				}
+				err = git.CheckoutBranch(branchToSwitchTo)
 				if err != nil {
 					return err
 				}
@@ -533,7 +574,9 @@ func prMerge(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		fmt.Fprintf(colorableOut(cmd), "%s Deleted branch %s%s\n", utils.Red("✔"), utils.Cyan(pr.HeadRefName), branchSwitchString)
+		if connectedToTerminal(cmd) {
+			fmt.Fprintf(colorableErr(cmd), "%s Deleted branch %s%s\n", utils.Red("✔"), utils.Cyan(pr.HeadRefName), branchSwitchString)
+		}
 	}
 
 	return nil
@@ -574,7 +617,7 @@ func prInteractiveMerge(deleteLocalBranch bool, crossRepoPR bool) (api.PullReque
 		DeleteBranch bool
 	}{}
 
-	err := SurveyAsk(qs, &answers)
+	err := prompt.SurveyAsk(qs, &answers)
 	if err != nil {
 		return 0, false, fmt.Errorf("could not prompt: %w", err)
 	}
@@ -593,7 +636,36 @@ func prInteractiveMerge(deleteLocalBranch bool, crossRepoPR bool) (api.PullReque
 	return mergeMethod, deleteBranch, nil
 }
 
-func printPrPreview(out io.Writer, pr *api.PullRequest) error {
+func prStateWithDraft(pr *api.PullRequest) string {
+	if pr.IsDraft && pr.State == "OPEN" {
+		return "DRAFT"
+	}
+
+	return pr.State
+}
+
+func printRawPrPreview(out io.Writer, pr *api.PullRequest) error {
+	reviewers := prReviewerList(*pr)
+	assignees := prAssigneeList(*pr)
+	labels := prLabelList(*pr)
+	projects := prProjectList(*pr)
+
+	fmt.Fprintf(out, "title:\t%s\n", pr.Title)
+	fmt.Fprintf(out, "state:\t%s\n", prStateWithDraft(pr))
+	fmt.Fprintf(out, "author:\t%s\n", pr.Author.Login)
+	fmt.Fprintf(out, "labels:\t%s\n", labels)
+	fmt.Fprintf(out, "assignees:\t%s\n", assignees)
+	fmt.Fprintf(out, "reviewers:\t%s\n", reviewers)
+	fmt.Fprintf(out, "projects:\t%s\n", projects)
+	fmt.Fprintf(out, "milestone:\t%s\n", pr.Milestone.Title)
+
+	fmt.Fprintln(out, "--")
+	fmt.Fprintln(out, pr.Body)
+
+	return nil
+}
+
+func printHumanPrPreview(out io.Writer, pr *api.PullRequest) error {
 	// Header (Title and State)
 	fmt.Fprintln(out, utils.Bold(pr.Title))
 	fmt.Fprintf(out, "%s", prStateTitleWithColor(*pr))

@@ -6,16 +6,32 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"runtime/debug"
 	"strings"
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/api"
 	"github.com/cli/cli/context"
+	"github.com/cli/cli/git"
 	"github.com/cli/cli/internal/config"
+	"github.com/cli/cli/internal/ghinstance"
 	"github.com/cli/cli/internal/ghrepo"
+	"github.com/cli/cli/internal/run"
 	apiCmd "github.com/cli/cli/pkg/cmd/api"
+	gistCreateCmd "github.com/cli/cli/pkg/cmd/gist/create"
+	prCheckoutCmd "github.com/cli/cli/pkg/cmd/pr/checkout"
+	prDiffCmd "github.com/cli/cli/pkg/cmd/pr/diff"
+	prReviewCmd "github.com/cli/cli/pkg/cmd/pr/review"
+	repoCmd "github.com/cli/cli/pkg/cmd/repo"
+	repoCloneCmd "github.com/cli/cli/pkg/cmd/repo/clone"
+	repoCreateCmd "github.com/cli/cli/pkg/cmd/repo/create"
+	creditsCmd "github.com/cli/cli/pkg/cmd/repo/credits"
+	repoForkCmd "github.com/cli/cli/pkg/cmd/repo/fork"
+	repoViewCmd "github.com/cli/cli/pkg/cmd/repo/view"
 	"github.com/cli/cli/pkg/cmdutil"
 	"github.com/cli/cli/pkg/iostreams"
 	"github.com/cli/cli/utils"
@@ -25,9 +41,6 @@ import (
 	"github.com/spf13/pflag"
 )
 
-// TODO these are sprinkled across command, context, config, and ghrepo
-const defaultHostname = "github.com"
-
 // Version is dynamically set by the toolchain or overridden by the Makefile.
 var Version = "DEV"
 
@@ -35,6 +48,8 @@ var Version = "DEV"
 var BuildDate = "" // YYYY-MM-DD
 
 var versionOutput = ""
+
+var defaultStreams *iostreams.IOStreams
 
 func init() {
 	if Version == "DEV" {
@@ -67,30 +82,99 @@ func init() {
 		return &cmdutil.FlagError{Err: err}
 	})
 
+	defaultStreams = iostreams.System()
+
 	// TODO: iron out how a factory incorporates context
 	cmdFactory := &cmdutil.Factory{
-		IOStreams: iostreams.System(),
+		IOStreams: defaultStreams,
 		HttpClient: func() (*http.Client, error) {
-			token := os.Getenv("GITHUB_TOKEN")
-			if len(token) == 0 {
-				// TODO: decouple from `context`
-				ctx := context.New()
-				var err error
-				// TODO: pass IOStreams to this so that the auth flow knows if it's interactive or not
-				token, err = ctx.AuthToken()
-				if err != nil {
-					return nil, err
-				}
+			// TODO: decouple from `context`
+			ctx := context.New()
+			cfg, err := ctx.Config()
+			if err != nil {
+				return nil, err
 			}
-			return httpClient(token), nil
+
+			// TODO: avoid setting Accept header for `api` command
+			return httpClient(defaultStreams, cfg, true), nil
 		},
 		BaseRepo: func() (ghrepo.Interface, error) {
 			// TODO: decouple from `context`
 			ctx := context.New()
 			return ctx.BaseRepo()
 		},
+		Remotes: func() (context.Remotes, error) {
+			ctx := context.New()
+			return ctx.Remotes()
+		},
+		Config: func() (config.Config, error) {
+			cfg, err := config.ParseDefaultConfig()
+			if errors.Is(err, os.ErrNotExist) {
+				cfg = config.NewBlankConfig()
+			} else if err != nil {
+				return nil, err
+			}
+			return cfg, nil
+		},
+		Branch: func() (string, error) {
+			currentBranch, err := git.CurrentBranch()
+			if err != nil {
+				return "", fmt.Errorf("could not determine current branch: %w", err)
+			}
+			return currentBranch, nil
+		},
 	}
 	RootCmd.AddCommand(apiCmd.NewCmdApi(cmdFactory, nil))
+
+	gistCmd := &cobra.Command{
+		Use:   "gist",
+		Short: "Create gists",
+		Long:  `Work with GitHub gists.`,
+	}
+	RootCmd.AddCommand(gistCmd)
+	gistCmd.AddCommand(gistCreateCmd.NewCmdCreate(cmdFactory, nil))
+
+	resolvedBaseRepo := func() (ghrepo.Interface, error) {
+		httpClient, err := cmdFactory.HttpClient()
+		if err != nil {
+			return nil, err
+		}
+
+		apiClient := api.NewClientFromHTTP(httpClient)
+
+		ctx := context.New()
+		remotes, err := ctx.Remotes()
+		if err != nil {
+			return nil, err
+		}
+		repoContext, err := context.ResolveRemotesToRepos(remotes, apiClient, "")
+		if err != nil {
+			return nil, err
+		}
+		baseRepo, err := repoContext.BaseRepo()
+		if err != nil {
+			return nil, err
+		}
+
+		return baseRepo, nil
+	}
+
+	repoResolvingCmdFactory := *cmdFactory
+
+	repoResolvingCmdFactory.BaseRepo = resolvedBaseRepo
+
+	RootCmd.AddCommand(repoCmd.Cmd)
+	repoCmd.Cmd.AddCommand(repoViewCmd.NewCmdView(&repoResolvingCmdFactory, nil))
+	repoCmd.Cmd.AddCommand(repoForkCmd.NewCmdFork(&repoResolvingCmdFactory, nil))
+	repoCmd.Cmd.AddCommand(repoCloneCmd.NewCmdClone(cmdFactory, nil))
+	repoCmd.Cmd.AddCommand(repoCreateCmd.NewCmdCreate(cmdFactory, nil))
+	repoCmd.Cmd.AddCommand(creditsCmd.NewCmdRepoCredits(&repoResolvingCmdFactory, nil))
+
+	prCmd.AddCommand(prReviewCmd.NewCmdReview(&repoResolvingCmdFactory, nil))
+	prCmd.AddCommand(prDiffCmd.NewCmdDiff(&repoResolvingCmdFactory, nil))
+	prCmd.AddCommand(prCheckoutCmd.NewCmdCheckout(&repoResolvingCmdFactory, nil))
+
+	RootCmd.AddCommand(creditsCmd.NewCmdCredits(cmdFactory, nil))
 }
 
 // RootCmd is the entry point of command-line execution
@@ -107,9 +191,31 @@ var RootCmd = &cobra.Command{
 	$ gh pr checkout 321
 	`),
 	Annotations: map[string]string{
-		"help:feedback": `
-Fill out our feedback form https://forms.gle/umxd3h31c7aMQFKG7
-Open an issue using “gh issue create -R cli/cli”`},
+		"help:feedback": heredoc.Doc(`
+			Fill out our feedback form https://forms.gle/umxd3h31c7aMQFKG7
+			Open an issue using “gh issue create -R cli/cli”
+		`),
+		"help:environment": heredoc.Doc(`
+			GITHUB_TOKEN: an authentication token for API requests. Setting this avoids being
+			prompted to authenticate and overrides any previously stored credentials.
+
+			GH_REPO: specify the GitHub repository in "OWNER/REPO" format for commands that
+			otherwise operate on a local repository.
+
+			GH_EDITOR, GIT_EDITOR, VISUAL, EDITOR (in order of precedence): the editor tool to use
+			for authoring text.
+
+			BROWSER: the web browser to use for opening links.
+
+			DEBUG: set to any value to enable verbose output to standard error. Include values "api"
+			or "oauth" to print detailed information about HTTP requests or authentication flow.
+
+			GLAMOUR_STYLE: the style to use for rendering Markdown. See
+			https://github.com/charmbracelet/glamour#styles
+
+			NO_COLOR: avoid printing ANSI escape sequences for color output.
+		`),
+	},
 }
 
 var versionCmd = &cobra.Command{
@@ -126,14 +232,11 @@ var initContext = func() context.Context {
 	if repo := os.Getenv("GH_REPO"); repo != "" {
 		ctx.SetBaseRepo(repo)
 	}
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-		ctx.SetAuthToken(token)
-	}
 	return ctx
 }
 
-// BasicClient returns an API client that borrows from but does not depend on
-// user configuration
+// BasicClient returns an API client for github.com only that borrows from but
+// does not depend on user configuration
 func BasicClient() (*api.Client, error) {
 	var opts []api.ClientOption
 	if verbose := os.Getenv("DEBUG"); verbose != "" {
@@ -144,7 +247,7 @@ func BasicClient() (*api.Client, error) {
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
 		if c, err := config.ParseDefaultConfig(); err == nil {
-			token, _ = c.Get(defaultHostname, "oauth_token")
+			token, _ = c.Get(ghinstance.Default(), "oauth_token")
 		}
 	}
 	if token != "" {
@@ -161,112 +264,68 @@ func contextForCommand(cmd *cobra.Command) context.Context {
 	return ctx
 }
 
-// for cmdutil-powered commands
-func httpClient(token string) *http.Client {
+// generic authenticated HTTP client for commands
+func httpClient(io *iostreams.IOStreams, cfg config.Config, setAccept bool) *http.Client {
 	var opts []api.ClientOption
 	if verbose := os.Getenv("DEBUG"); verbose != "" {
 		opts = append(opts, apiVerboseLog())
 	}
+
 	opts = append(opts,
-		api.AddHeader("Authorization", fmt.Sprintf("token %s", token)),
 		api.AddHeader("User-Agent", fmt.Sprintf("GitHub CLI %s", Version)),
+		api.AddHeaderFunc("Authorization", func(req *http.Request) (string, error) {
+			if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+				return fmt.Sprintf("token %s", token), nil
+			}
+
+			hostname := ghinstance.NormalizeHostname(req.URL.Hostname())
+			token, err := cfg.Get(hostname, "oauth_token")
+			if token == "" {
+				var notFound *config.NotFoundError
+				// TODO: check if stdout is TTY too
+				if errors.As(err, &notFound) && io.IsStdinTTY() {
+					// interactive OAuth flow
+					token, err = config.AuthFlowWithConfig(cfg, hostname, "Notice: authentication required")
+				}
+				if err != nil {
+					return "", err
+				}
+				if token == "" {
+					// TODO: instruct user how to manually authenticate
+					return "", fmt.Errorf("authentication required for %s", hostname)
+				}
+			}
+
+			return fmt.Sprintf("token %s", token), nil
+		}),
 	)
+
+	if setAccept {
+		opts = append(opts,
+			api.AddHeaderFunc("Accept", func(req *http.Request) (string, error) {
+				// antiope-preview: Checks
+				accept := "application/vnd.github.antiope-preview+json"
+				if ghinstance.IsEnterprise(req.URL.Hostname()) {
+					// shadow-cat-preview: Draft pull requests
+					accept += ", application/vnd.github.shadow-cat-preview"
+				}
+				return accept, nil
+			}),
+		)
+	}
+
 	return api.NewHTTPClient(opts...)
 }
 
-// overridden in tests
+// LEGACY; overridden in tests
 var apiClientForContext = func(ctx context.Context) (*api.Client, error) {
-	token, err := ctx.AuthToken()
+	cfg, err := ctx.Config()
 	if err != nil {
 		return nil, err
 	}
 
-	var opts []api.ClientOption
-	if verbose := os.Getenv("DEBUG"); verbose != "" {
-		opts = append(opts, apiVerboseLog())
-	}
-
-	getAuthValue := func() string {
-		return fmt.Sprintf("token %s", token)
-	}
-
-	tokenFromEnv := func() bool {
-		return os.Getenv("GITHUB_TOKEN") == token
-	}
-
-	checkScopesFunc := func(appID string) error {
-		if config.IsGitHubApp(appID) && !tokenFromEnv() && utils.IsTerminal(os.Stdin) && utils.IsTerminal(os.Stderr) {
-			cfg, err := ctx.Config()
-			if err != nil {
-				return err
-			}
-			newToken, err := config.AuthFlowWithConfig(cfg, defaultHostname, "Notice: additional authorization required")
-			if err != nil {
-				return err
-			}
-			// update configuration in memory
-			token = newToken
-		} else {
-			fmt.Fprintln(os.Stderr, "Warning: gh now requires the `read:org` OAuth scope.")
-			fmt.Fprintln(os.Stderr, "Visit https://github.com/settings/tokens and edit your token to enable `read:org`")
-			if tokenFromEnv() {
-				fmt.Fprintln(os.Stderr, "or generate a new token for the GITHUB_TOKEN environment variable")
-			} else {
-				fmt.Fprintln(os.Stderr, "or generate a new token and paste it via `gh config set -h github.com oauth_token MYTOKEN`")
-			}
-		}
-		return nil
-	}
-
-	opts = append(opts,
-		api.CheckScopes("read:org", checkScopesFunc),
-		api.AddHeaderFunc("Authorization", getAuthValue),
-		api.AddHeader("User-Agent", fmt.Sprintf("GitHub CLI %s", Version)),
-		// antiope-preview: Checks
-		api.AddHeader("Accept", "application/vnd.github.antiope-preview+json"),
-	)
-
-	return api.NewClient(opts...), nil
-}
-
-var ensureScopes = func(ctx context.Context, client *api.Client, wantedScopes ...string) (*api.Client, error) {
-	hasScopes, appID, err := client.HasScopes(wantedScopes...)
-	if err != nil {
-		return client, err
-	}
-
-	if hasScopes {
-		return client, nil
-	}
-
-	tokenFromEnv := len(os.Getenv("GITHUB_TOKEN")) > 0
-
-	if config.IsGitHubApp(appID) && !tokenFromEnv && utils.IsTerminal(os.Stdin) && utils.IsTerminal(os.Stderr) {
-		cfg, err := ctx.Config()
-		if err != nil {
-			return nil, err
-		}
-		_, err = config.AuthFlowWithConfig(cfg, defaultHostname, "Notice: additional authorization required")
-		if err != nil {
-			return nil, err
-		}
-
-		reloadedClient, err := apiClientForContext(ctx)
-		if err != nil {
-			return client, err
-		}
-		return reloadedClient, nil
-	} else {
-		fmt.Fprintln(os.Stderr, fmt.Sprintf("Warning: gh now requires %s OAuth scopes.", wantedScopes))
-		fmt.Fprintln(os.Stderr, fmt.Sprintf("Visit https://github.com/settings/tokens and edit your token to enable %s", wantedScopes))
-		if tokenFromEnv {
-			fmt.Fprintln(os.Stderr, "or generate a new token for the GITHUB_TOKEN environment variable")
-		} else {
-			fmt.Fprintln(os.Stderr, "or generate a new token and paste it via `gh config set -h github.com oauth_token MYTOKEN`")
-		}
-		return client, errors.New("Unable to reauthenticate")
-	}
-
+	http := httpClient(defaultStreams, cfg, true)
+	return api.NewClientFromHTTP(http), nil
 }
 
 func apiVerboseLog() api.ClientOption {
@@ -330,25 +389,26 @@ func determineBaseRepo(apiClient *api.Client, cmd *cobra.Command, ctx context.Co
 	return baseRepo, nil
 }
 
-func formatRemoteURL(cmd *cobra.Command, fullRepoName string) string {
+// TODO there is a parallel implementation for isolated commands
+func formatRemoteURL(cmd *cobra.Command, repo ghrepo.Interface) string {
 	ctx := contextForCommand(cmd)
 
-	protocol := "https"
+	var protocol string
 	cfg, err := ctx.Config()
 	if err != nil {
 		fmt.Fprintf(colorableErr(cmd), "%s failed to load config: %s. using defaults\n", utils.Yellow("!"), err)
 	} else {
-		cfgProtocol, _ := cfg.Get(defaultHostname, "git_protocol")
-		protocol = cfgProtocol
+		protocol, _ = cfg.Get(repo.RepoHost(), "git_protocol")
 	}
 
 	if protocol == "ssh" {
-		return fmt.Sprintf("git@%s:%s.git", defaultHostname, fullRepoName)
+		return fmt.Sprintf("git@%s:%s/%s.git", repo.RepoHost(), repo.RepoOwner(), repo.RepoName())
 	}
 
-	return fmt.Sprintf("https://%s/%s.git", defaultHostname, fullRepoName)
+	return fmt.Sprintf("https://%s/%s/%s.git", repo.RepoHost(), repo.RepoOwner(), repo.RepoName())
 }
 
+// TODO there is a parallel implementation for isolated commands
 func determineEditor(cmd *cobra.Command) (string, error) {
 	editorCommand := os.Getenv("GH_EDITOR")
 	if editorCommand == "" {
@@ -357,31 +417,92 @@ func determineEditor(cmd *cobra.Command) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("could not read config: %w", err)
 		}
-		editorCommand, _ = cfg.Get(defaultHostname, "editor")
+		// TODO: consider supporting setting an editor per GHE host
+		editorCommand, _ = cfg.Get(ghinstance.Default(), "editor")
 	}
 
 	return editorCommand, nil
 }
 
-func ExpandAlias(args []string) ([]string, error) {
-	empty := []string{}
+func ExecuteShellAlias(args []string) error {
+	externalCmd := exec.Command(args[0], args[1:]...)
+	externalCmd.Stderr = os.Stderr
+	externalCmd.Stdout = os.Stdout
+	externalCmd.Stdin = os.Stdin
+	preparedCmd := run.PrepareCmd(externalCmd)
+
+	return preparedCmd.Run()
+}
+
+var findSh = func() (string, error) {
+	shPath, err := exec.LookPath("sh")
+	if err == nil {
+		return shPath, nil
+	}
+
+	if runtime.GOOS == "windows" {
+		winNotFoundErr := errors.New("unable to locate sh to execute the shell alias with. The sh.exe interpreter is typically distributed with Git for Windows.")
+		// We can try and find a sh executable in a Git for Windows install
+		gitPath, err := exec.LookPath("git")
+		if err != nil {
+			return "", winNotFoundErr
+		}
+
+		shPath = filepath.Join(filepath.Dir(gitPath), "..", "bin", "sh.exe")
+		_, err = os.Stat(shPath)
+		if err != nil {
+			return "", winNotFoundErr
+		}
+
+		return shPath, nil
+	}
+
+	return "", errors.New("unable to locate sh to execute shell alias with")
+}
+
+// ExpandAlias processes argv to see if it should be rewritten according to a user's aliases. The
+// second return value indicates whether the alias should be executed in a new shell process instead
+// of running gh itself.
+func ExpandAlias(args []string) (expanded []string, isShell bool, err error) {
+	err = nil
+	isShell = false
+	expanded = []string{}
+
 	if len(args) < 2 {
 		// the command is lacking a subcommand
-		return empty, nil
+		return
 	}
 
 	ctx := initContext()
 	cfg, err := ctx.Config()
 	if err != nil {
-		return empty, err
+		return
 	}
 	aliases, err := cfg.Aliases()
 	if err != nil {
-		return empty, err
+		return
 	}
 
 	expansion, ok := aliases.Get(args[1])
 	if ok {
+		if strings.HasPrefix(expansion, "!") {
+			isShell = true
+			shPath, shErr := findSh()
+			if shErr != nil {
+				err = shErr
+				return
+			}
+
+			expanded = []string{shPath, "-c", expansion[1:]}
+
+			if len(args[2:]) > 0 {
+				expanded = append(expanded, "--")
+				expanded = append(expanded, args[2:]...)
+			}
+
+			return
+		}
+
 		extraArgs := []string{}
 		for i, a := range args[2:] {
 			if !strings.Contains(expansion, "$") {
@@ -392,18 +513,24 @@ func ExpandAlias(args []string) ([]string, error) {
 		}
 		lingeringRE := regexp.MustCompile(`\$\d`)
 		if lingeringRE.MatchString(expansion) {
-			return empty, fmt.Errorf("not enough arguments for alias: %s", expansion)
+			err = fmt.Errorf("not enough arguments for alias: %s", expansion)
+			return
 		}
 
-		newArgs, err := shlex.Split(expansion)
+		var newArgs []string
+		newArgs, err = shlex.Split(expansion)
 		if err != nil {
-			return nil, err
+			return
 		}
 
-		newArgs = append(newArgs, extraArgs...)
-
-		return newArgs, nil
+		expanded = append(newArgs, extraArgs...)
+		return
 	}
 
-	return args[1:], nil
+	expanded = args[1:]
+	return
+}
+
+func connectedToTerminal(cmd *cobra.Command) bool {
+	return utils.IsTerminal(cmd.InOrStdin()) && utils.IsTerminal(cmd.OutOrStdout())
 }

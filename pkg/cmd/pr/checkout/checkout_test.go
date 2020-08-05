@@ -1,31 +1,107 @@
-package command
+package checkout
 
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io/ioutil"
+	"net/http"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/cli/cli/api"
 	"github.com/cli/cli/context"
+	"github.com/cli/cli/git"
+	"github.com/cli/cli/internal/config"
+	"github.com/cli/cli/internal/ghrepo"
 	"github.com/cli/cli/internal/run"
+	"github.com/cli/cli/pkg/cmdutil"
+	"github.com/cli/cli/pkg/httpmock"
+	"github.com/cli/cli/pkg/iostreams"
 	"github.com/cli/cli/test"
+	"github.com/google/shlex"
+	"github.com/stretchr/testify/assert"
 )
 
-func TestPRCheckout_sameRepo(t *testing.T) {
-	ctx := context.NewBlank()
-	ctx.SetBranch("master")
-	ctx.SetRemotes(map[string]string{
-		"origin": "OWNER/REPO",
-	})
-	initContext = func() context.Context {
-		return ctx
+func eq(t *testing.T, got interface{}, expected interface{}) {
+	t.Helper()
+	if !reflect.DeepEqual(got, expected) {
+		t.Errorf("expected: %v, got: %v", expected, got)
 	}
-	http := initFakeHTTP()
-	http.StubRepoResponse("OWNER", "REPO")
+}
 
-	http.StubResponse(200, bytes.NewBufferString(`
+type errorStub struct {
+	message string
+}
+
+func (s errorStub) Output() ([]byte, error) {
+	return nil, errors.New(s.message)
+}
+
+func (s errorStub) Run() error {
+	return errors.New(s.message)
+}
+
+func runCommand(rt http.RoundTripper, remotes context.Remotes, branch string, cli string) (*test.CmdOut, error) {
+	io, _, stdout, stderr := iostreams.Test()
+
+	factory := &cmdutil.Factory{
+		IOStreams: io,
+		HttpClient: func() (*http.Client, error) {
+			return &http.Client{Transport: rt}, nil
+		},
+		Config: func() (config.Config, error) {
+			return config.NewBlankConfig(), nil
+		},
+		BaseRepo: func() (ghrepo.Interface, error) {
+			return api.InitRepoHostname(&api.Repository{
+				Name:             "REPO",
+				Owner:            api.RepositoryOwner{Login: "OWNER"},
+				DefaultBranchRef: api.BranchRef{Name: "master"},
+			}, "github.com"), nil
+		},
+		Remotes: func() (context.Remotes, error) {
+			if remotes == nil {
+				return context.Remotes{
+					{
+						Remote: &git.Remote{Name: "origin"},
+						Repo:   ghrepo.New("OWNER", "REPO"),
+					},
+				}, nil
+			}
+			return remotes, nil
+		},
+		Branch: func() (string, error) {
+			return branch, nil
+		},
+	}
+
+	cmd := NewCmdCheckout(factory, nil)
+
+	argv, err := shlex.Split(cli)
+	if err != nil {
+		return nil, err
+	}
+	cmd.SetArgs(argv)
+
+	cmd.SetIn(&bytes.Buffer{})
+	cmd.SetOut(ioutil.Discard)
+	cmd.SetErr(ioutil.Discard)
+
+	_, err = cmd.ExecuteC()
+	return &test.CmdOut{
+		OutBuf: stdout,
+		ErrBuf: stderr,
+	}, err
+}
+
+func TestPRCheckout_sameRepo(t *testing.T) {
+	http := &httpmock.Registry{}
+	defer http.Verify(t)
+
+	http.Register(httpmock.GraphQL(`query PullRequestByNumber\b`), httpmock.StringResponse(`
 	{ "data": { "repository": { "pullRequest": {
 		"number": 123,
 		"headRefName": "feature",
@@ -33,10 +109,7 @@ func TestPRCheckout_sameRepo(t *testing.T) {
 			"login": "hubot"
 		},
 		"headRepository": {
-			"name": "REPO",
-			"defaultBranchRef": {
-				"name": "master"
-			}
+			"name": "REPO"
 		},
 		"isCrossRepository": false,
 		"maintainerCanModify": false
@@ -55,11 +128,15 @@ func TestPRCheckout_sameRepo(t *testing.T) {
 	})
 	defer restoreCmd()
 
-	output, err := RunCommand(`pr checkout 123`)
-	eq(t, err, nil)
-	eq(t, output.String(), "")
+	output, err := runCommand(http, nil, "master", `123`)
+	if !assert.NoError(t, err) {
+		return
+	}
 
-	eq(t, len(ranCommands), 4)
+	assert.Equal(t, "", output.String())
+	if !assert.Equal(t, 4, len(ranCommands)) {
+		return
+	}
 	eq(t, strings.Join(ranCommands[0], " "), "git fetch origin +refs/heads/feature:refs/remotes/origin/feature")
 	eq(t, strings.Join(ranCommands[1], " "), "git checkout -b feature --no-track origin/feature")
 	eq(t, strings.Join(ranCommands[2], " "), "git config branch.feature.remote origin")
@@ -67,16 +144,9 @@ func TestPRCheckout_sameRepo(t *testing.T) {
 }
 
 func TestPRCheckout_urlArg(t *testing.T) {
-	ctx := context.NewBlank()
-	ctx.SetBranch("master")
-	ctx.SetRemotes(map[string]string{
-		"origin": "OWNER/REPO",
-	})
-	initContext = func() context.Context {
-		return ctx
-	}
-	http := initFakeHTTP()
-	http.StubResponse(200, bytes.NewBufferString(`
+	http := &httpmock.Registry{}
+	defer http.Verify(t)
+	http.Register(httpmock.GraphQL(`query PullRequestByNumber\b`), httpmock.StringResponse(`
 	{ "data": { "repository": { "pullRequest": {
 		"number": 123,
 		"headRefName": "feature",
@@ -84,10 +154,7 @@ func TestPRCheckout_urlArg(t *testing.T) {
 			"login": "hubot"
 		},
 		"headRepository": {
-			"name": "REPO",
-			"defaultBranchRef": {
-				"name": "master"
-			}
+			"name": "REPO"
 		},
 		"isCrossRepository": false,
 		"maintainerCanModify": false
@@ -106,7 +173,7 @@ func TestPRCheckout_urlArg(t *testing.T) {
 	})
 	defer restoreCmd()
 
-	output, err := RunCommand(`pr checkout https://github.com/OWNER/REPO/pull/123/files`)
+	output, err := runCommand(http, nil, "master", `https://github.com/OWNER/REPO/pull/123/files`)
 	eq(t, err, nil)
 	eq(t, output.String(), "")
 
@@ -115,16 +182,9 @@ func TestPRCheckout_urlArg(t *testing.T) {
 }
 
 func TestPRCheckout_urlArg_differentBase(t *testing.T) {
-	ctx := context.NewBlank()
-	ctx.SetBranch("master")
-	ctx.SetRemotes(map[string]string{
-		"origin": "OWNER/REPO",
-	})
-	initContext = func() context.Context {
-		return ctx
-	}
-	http := initFakeHTTP()
-	http.StubResponse(200, bytes.NewBufferString(`
+	http := &httpmock.Registry{}
+	defer http.Verify(t)
+	http.Register(httpmock.GraphQL(`query PullRequestByNumber\b`), httpmock.StringResponse(`
 	{ "data": { "repository": { "pullRequest": {
 		"number": 123,
 		"headRefName": "feature",
@@ -132,14 +192,16 @@ func TestPRCheckout_urlArg_differentBase(t *testing.T) {
 			"login": "hubot"
 		},
 		"headRepository": {
-			"name": "POE",
-			"defaultBranchRef": {
-				"name": "master"
-			}
+			"name": "POE"
 		},
 		"isCrossRepository": false,
 		"maintainerCanModify": false
 	} } } }
+	`))
+	http.Register(httpmock.GraphQL(`query RepositoryInfo\b`), httpmock.StringResponse(`
+	{ "data": { "repository": {
+		"defaultBranchRef": {"name": "master"}
+	} } }
 	`))
 
 	ranCommands := [][]string{}
@@ -154,7 +216,7 @@ func TestPRCheckout_urlArg_differentBase(t *testing.T) {
 	})
 	defer restoreCmd()
 
-	output, err := RunCommand(`pr checkout https://github.com/OTHER/POE/pull/123/files`)
+	output, err := runCommand(http, nil, "master", `https://github.com/OTHER/POE/pull/123/files`)
 	eq(t, err, nil)
 	eq(t, output.String(), "")
 
@@ -176,18 +238,10 @@ func TestPRCheckout_urlArg_differentBase(t *testing.T) {
 }
 
 func TestPRCheckout_branchArg(t *testing.T) {
-	ctx := context.NewBlank()
-	ctx.SetBranch("master")
-	ctx.SetRemotes(map[string]string{
-		"origin": "OWNER/REPO",
-	})
-	initContext = func() context.Context {
-		return ctx
-	}
-	http := initFakeHTTP()
-	http.StubRepoResponse("OWNER", "REPO")
+	http := &httpmock.Registry{}
+	defer http.Verify(t)
 
-	http.StubResponse(200, bytes.NewBufferString(`
+	http.Register(httpmock.GraphQL(`query PullRequestForBranch\b`), httpmock.StringResponse(`
 	{ "data": { "repository": { "pullRequests": { "nodes": [
 		{ "number": 123,
 		  "headRefName": "feature",
@@ -195,10 +249,7 @@ func TestPRCheckout_branchArg(t *testing.T) {
 		  	"login": "hubot"
 		  },
 		  "headRepository": {
-		  	"name": "REPO",
-		  	"defaultBranchRef": {
-		  		"name": "master"
-		  	}
+		  	"name": "REPO"
 		  },
 		  "isCrossRepository": true,
 		  "maintainerCanModify": false }
@@ -217,7 +268,7 @@ func TestPRCheckout_branchArg(t *testing.T) {
 	})
 	defer restoreCmd()
 
-	output, err := RunCommand(`pr checkout hubot:feature`)
+	output, err := runCommand(http, nil, "master", `hubot:feature`)
 	eq(t, err, nil)
 	eq(t, output.String(), "")
 
@@ -226,18 +277,10 @@ func TestPRCheckout_branchArg(t *testing.T) {
 }
 
 func TestPRCheckout_existingBranch(t *testing.T) {
-	ctx := context.NewBlank()
-	ctx.SetBranch("master")
-	ctx.SetRemotes(map[string]string{
-		"origin": "OWNER/REPO",
-	})
-	initContext = func() context.Context {
-		return ctx
-	}
-	http := initFakeHTTP()
-	http.StubRepoResponse("OWNER", "REPO")
+	http := &httpmock.Registry{}
+	defer http.Verify(t)
 
-	http.StubResponse(200, bytes.NewBufferString(`
+	http.Register(httpmock.GraphQL(`query PullRequestByNumber\b`), httpmock.StringResponse(`
 	{ "data": { "repository": { "pullRequest": {
 		"number": 123,
 		"headRefName": "feature",
@@ -245,10 +288,7 @@ func TestPRCheckout_existingBranch(t *testing.T) {
 			"login": "hubot"
 		},
 		"headRepository": {
-			"name": "REPO",
-			"defaultBranchRef": {
-				"name": "master"
-			}
+			"name": "REPO"
 		},
 		"isCrossRepository": false,
 		"maintainerCanModify": false
@@ -267,7 +307,7 @@ func TestPRCheckout_existingBranch(t *testing.T) {
 	})
 	defer restoreCmd()
 
-	output, err := RunCommand(`pr checkout 123`)
+	output, err := runCommand(http, nil, "master", `123`)
 	eq(t, err, nil)
 	eq(t, output.String(), "")
 
@@ -278,19 +318,21 @@ func TestPRCheckout_existingBranch(t *testing.T) {
 }
 
 func TestPRCheckout_differentRepo_remoteExists(t *testing.T) {
-	ctx := context.NewBlank()
-	ctx.SetBranch("master")
-	ctx.SetRemotes(map[string]string{
-		"origin":     "OWNER/REPO",
-		"robot-fork": "hubot/REPO",
-	})
-	initContext = func() context.Context {
-		return ctx
+	remotes := context.Remotes{
+		{
+			Remote: &git.Remote{Name: "origin"},
+			Repo:   ghrepo.New("OWNER", "REPO"),
+		},
+		{
+			Remote: &git.Remote{Name: "robot-fork"},
+			Repo:   ghrepo.New("hubot", "REPO"),
+		},
 	}
-	http := initFakeHTTP()
-	http.StubRepoResponse("OWNER", "REPO")
 
-	http.StubResponse(200, bytes.NewBufferString(`
+	http := &httpmock.Registry{}
+	defer http.Verify(t)
+
+	http.Register(httpmock.GraphQL(`query PullRequestByNumber\b`), httpmock.StringResponse(`
 	{ "data": { "repository": { "pullRequest": {
 		"number": 123,
 		"headRefName": "feature",
@@ -298,10 +340,7 @@ func TestPRCheckout_differentRepo_remoteExists(t *testing.T) {
 			"login": "hubot"
 		},
 		"headRepository": {
-			"name": "REPO",
-			"defaultBranchRef": {
-				"name": "master"
-			}
+			"name": "REPO"
 		},
 		"isCrossRepository": true,
 		"maintainerCanModify": false
@@ -320,7 +359,7 @@ func TestPRCheckout_differentRepo_remoteExists(t *testing.T) {
 	})
 	defer restoreCmd()
 
-	output, err := RunCommand(`pr checkout 123`)
+	output, err := runCommand(http, remotes, "master", `123`)
 	eq(t, err, nil)
 	eq(t, output.String(), "")
 
@@ -332,18 +371,10 @@ func TestPRCheckout_differentRepo_remoteExists(t *testing.T) {
 }
 
 func TestPRCheckout_differentRepo(t *testing.T) {
-	ctx := context.NewBlank()
-	ctx.SetBranch("master")
-	ctx.SetRemotes(map[string]string{
-		"origin": "OWNER/REPO",
-	})
-	initContext = func() context.Context {
-		return ctx
-	}
-	http := initFakeHTTP()
-	http.StubRepoResponse("OWNER", "REPO")
+	http := &httpmock.Registry{}
+	defer http.Verify(t)
 
-	http.StubResponse(200, bytes.NewBufferString(`
+	http.Register(httpmock.GraphQL(`query PullRequestByNumber\b`), httpmock.StringResponse(`
 	{ "data": { "repository": { "pullRequest": {
 		"number": 123,
 		"headRefName": "feature",
@@ -351,10 +382,7 @@ func TestPRCheckout_differentRepo(t *testing.T) {
 			"login": "hubot"
 		},
 		"headRepository": {
-			"name": "REPO",
-			"defaultBranchRef": {
-				"name": "master"
-			}
+			"name": "REPO"
 		},
 		"isCrossRepository": true,
 		"maintainerCanModify": false
@@ -373,7 +401,7 @@ func TestPRCheckout_differentRepo(t *testing.T) {
 	})
 	defer restoreCmd()
 
-	output, err := RunCommand(`pr checkout 123`)
+	output, err := runCommand(http, nil, "master", `123`)
 	eq(t, err, nil)
 	eq(t, output.String(), "")
 
@@ -385,18 +413,10 @@ func TestPRCheckout_differentRepo(t *testing.T) {
 }
 
 func TestPRCheckout_differentRepo_existingBranch(t *testing.T) {
-	ctx := context.NewBlank()
-	ctx.SetBranch("master")
-	ctx.SetRemotes(map[string]string{
-		"origin": "OWNER/REPO",
-	})
-	initContext = func() context.Context {
-		return ctx
-	}
-	http := initFakeHTTP()
-	http.StubRepoResponse("OWNER", "REPO")
+	http := &httpmock.Registry{}
+	defer http.Verify(t)
 
-	http.StubResponse(200, bytes.NewBufferString(`
+	http.Register(httpmock.GraphQL(`query PullRequestByNumber\b`), httpmock.StringResponse(`
 	{ "data": { "repository": { "pullRequest": {
 		"number": 123,
 		"headRefName": "feature",
@@ -404,10 +424,7 @@ func TestPRCheckout_differentRepo_existingBranch(t *testing.T) {
 			"login": "hubot"
 		},
 		"headRepository": {
-			"name": "REPO",
-			"defaultBranchRef": {
-				"name": "master"
-			}
+			"name": "REPO"
 		},
 		"isCrossRepository": true,
 		"maintainerCanModify": false
@@ -426,7 +443,7 @@ func TestPRCheckout_differentRepo_existingBranch(t *testing.T) {
 	})
 	defer restoreCmd()
 
-	output, err := RunCommand(`pr checkout 123`)
+	output, err := runCommand(http, nil, "master", `123`)
 	eq(t, err, nil)
 	eq(t, output.String(), "")
 
@@ -436,18 +453,10 @@ func TestPRCheckout_differentRepo_existingBranch(t *testing.T) {
 }
 
 func TestPRCheckout_differentRepo_currentBranch(t *testing.T) {
-	ctx := context.NewBlank()
-	ctx.SetBranch("feature")
-	ctx.SetRemotes(map[string]string{
-		"origin": "OWNER/REPO",
-	})
-	initContext = func() context.Context {
-		return ctx
-	}
-	http := initFakeHTTP()
-	http.StubRepoResponse("OWNER", "REPO")
+	http := &httpmock.Registry{}
+	defer http.Verify(t)
 
-	http.StubResponse(200, bytes.NewBufferString(`
+	http.Register(httpmock.GraphQL(`query PullRequestByNumber\b`), httpmock.StringResponse(`
 	{ "data": { "repository": { "pullRequest": {
 		"number": 123,
 		"headRefName": "feature",
@@ -455,10 +464,7 @@ func TestPRCheckout_differentRepo_currentBranch(t *testing.T) {
 			"login": "hubot"
 		},
 		"headRepository": {
-			"name": "REPO",
-			"defaultBranchRef": {
-				"name": "master"
-			}
+			"name": "REPO"
 		},
 		"isCrossRepository": true,
 		"maintainerCanModify": false
@@ -477,7 +483,7 @@ func TestPRCheckout_differentRepo_currentBranch(t *testing.T) {
 	})
 	defer restoreCmd()
 
-	output, err := RunCommand(`pr checkout 123`)
+	output, err := runCommand(http, nil, "feature", `123`)
 	eq(t, err, nil)
 	eq(t, output.String(), "")
 
@@ -486,19 +492,43 @@ func TestPRCheckout_differentRepo_currentBranch(t *testing.T) {
 	eq(t, strings.Join(ranCommands[1], " "), "git merge --ff-only FETCH_HEAD")
 }
 
-func TestPRCheckout_maintainerCanModify(t *testing.T) {
-	ctx := context.NewBlank()
-	ctx.SetBranch("master")
-	ctx.SetRemotes(map[string]string{
-		"origin": "OWNER/REPO",
-	})
-	initContext = func() context.Context {
-		return ctx
-	}
-	http := initFakeHTTP()
-	http.StubRepoResponse("OWNER", "REPO")
+func TestPRCheckout_differentRepo_invalidBranchName(t *testing.T) {
+	http := &httpmock.Registry{}
+	defer http.Verify(t)
 
-	http.StubResponse(200, bytes.NewBufferString(`
+	http.Register(httpmock.GraphQL(`query PullRequestByNumber\b`), httpmock.StringResponse(`
+	{ "data": { "repository": { "pullRequest": {
+		"number": 123,
+		"headRefName": "-foo",
+		"headRepositoryOwner": {
+			"login": "hubot"
+		},
+		"headRepository": {
+			"name": "REPO"
+		},
+		"isCrossRepository": true,
+		"maintainerCanModify": false
+	} } } }
+	`))
+
+	restoreCmd := run.SetPrepareCmd(func(cmd *exec.Cmd) run.Runnable {
+		t.Errorf("unexpected external invocation: %v", cmd.Args)
+		return &test.OutputStub{}
+	})
+	defer restoreCmd()
+
+	output, err := runCommand(http, nil, "master", `123`)
+	if assert.Errorf(t, err, "expected command to fail") {
+		assert.Equal(t, `invalid branch name: "-foo"`, err.Error())
+	}
+	assert.Equal(t, "", output.Stderr())
+}
+
+func TestPRCheckout_maintainerCanModify(t *testing.T) {
+	http := &httpmock.Registry{}
+	defer http.Verify(t)
+
+	http.Register(httpmock.GraphQL(`query PullRequestByNumber\b`), httpmock.StringResponse(`
 	{ "data": { "repository": { "pullRequest": {
 		"number": 123,
 		"headRefName": "feature",
@@ -506,10 +536,7 @@ func TestPRCheckout_maintainerCanModify(t *testing.T) {
 			"login": "hubot"
 		},
 		"headRepository": {
-			"name": "REPO",
-			"defaultBranchRef": {
-				"name": "master"
-			}
+			"name": "REPO"
 		},
 		"isCrossRepository": true,
 		"maintainerCanModify": true
@@ -528,7 +555,7 @@ func TestPRCheckout_maintainerCanModify(t *testing.T) {
 	})
 	defer restoreCmd()
 
-	output, err := RunCommand(`pr checkout 123`)
+	output, err := runCommand(http, nil, "master", `123`)
 	eq(t, err, nil)
 	eq(t, output.String(), "")
 

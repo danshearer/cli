@@ -2,10 +2,6 @@ package command
 
 import (
 	"bytes"
-	"encoding/json"
-	"io"
-	"io/ioutil"
-	"os"
 	"os/exec"
 	"reflect"
 	"regexp"
@@ -14,8 +10,11 @@ import (
 
 	"github.com/cli/cli/api"
 	"github.com/cli/cli/internal/run"
+	"github.com/cli/cli/pkg/httpmock"
+	"github.com/cli/cli/pkg/prompt"
 	"github.com/cli/cli/test"
 	"github.com/google/go-cmp/cmp"
+	"github.com/stretchr/testify/assert"
 )
 
 func eq(t *testing.T, got interface{}, expected interface{}) {
@@ -29,10 +28,7 @@ func TestPRStatus(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "blueberries")
 	http := initFakeHTTP()
 	http.StubRepoResponse("OWNER", "REPO")
-
-	jsonFile, _ := os.Open("../test/fixtures/prStatus.json")
-	defer jsonFile.Close()
-	http.StubResponse(200, jsonFile)
+	http.Register(httpmock.GraphQL(`query PullRequestStatus\b`), httpmock.FileResponse("../test/fixtures/prStatus.json"))
 
 	output, err := RunCommand("pr status")
 	if err != nil {
@@ -57,10 +53,7 @@ func TestPRStatus_fork(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "blueberries")
 	http := initFakeHTTP()
 	http.StubForkedRepoResponse("OWNER/REPO", "PARENT/REPO")
-
-	jsonFile, _ := os.Open("../test/fixtures/prStatusFork.json")
-	defer jsonFile.Close()
-	http.StubResponse(200, jsonFile)
+	http.Register(httpmock.GraphQL(`query PullRequestStatus\b`), httpmock.FileResponse("../test/fixtures/prStatusFork.json"))
 
 	defer run.SetPrepareCmd(func(cmd *exec.Cmd) run.Runnable {
 		switch strings.Join(cmd.Args, " ") {
@@ -87,10 +80,7 @@ func TestPRStatus_reviewsAndChecks(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "blueberries")
 	http := initFakeHTTP()
 	http.StubRepoResponse("OWNER", "REPO")
-
-	jsonFile, _ := os.Open("../test/fixtures/prStatusChecks.json")
-	defer jsonFile.Close()
-	http.StubResponse(200, jsonFile)
+	http.Register(httpmock.GraphQL(`query PullRequestStatus\b`), httpmock.FileResponse("../test/fixtures/prStatusChecks.json"))
 
 	output, err := RunCommand("pr status")
 	if err != nil {
@@ -114,10 +104,7 @@ func TestPRStatus_currentBranch_showTheMostRecentPR(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "blueberries")
 	http := initFakeHTTP()
 	http.StubRepoResponse("OWNER", "REPO")
-
-	jsonFile, _ := os.Open("../test/fixtures/prStatusCurrentBranch.json")
-	defer jsonFile.Close()
-	http.StubResponse(200, jsonFile)
+	http.Register(httpmock.GraphQL(`query PullRequestStatus\b`), httpmock.FileResponse("../test/fixtures/prStatusCurrentBranch.json"))
 
 	output, err := RunCommand("pr status")
 	if err != nil {
@@ -146,10 +133,7 @@ func TestPRStatus_currentBranch_defaultBranch(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "blueberries")
 	http := initFakeHTTP()
 	http.StubRepoResponseWithDefaultBranch("OWNER", "REPO", "blueberries")
-
-	jsonFile, _ := os.Open("../test/fixtures/prStatusCurrentBranch.json")
-	defer jsonFile.Close()
-	http.StubResponse(200, jsonFile)
+	http.Register(httpmock.GraphQL(`query PullRequestStatus\b`), httpmock.FileResponse("../test/fixtures/prStatusCurrentBranch.json"))
 
 	output, err := RunCommand("pr status")
 	if err != nil {
@@ -166,10 +150,7 @@ func TestPRStatus_currentBranch_defaultBranch(t *testing.T) {
 func TestPRStatus_currentBranch_defaultBranch_repoFlag(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "blueberries")
 	http := initFakeHTTP()
-
-	jsonFile, _ := os.Open("../test/fixtures/prStatusCurrentBranchClosedOnDefaultBranch.json")
-	defer jsonFile.Close()
-	http.StubResponse(200, jsonFile)
+	http.Register(httpmock.GraphQL(`query PullRequestStatus\b`), httpmock.FileResponse("../test/fixtures/prStatusCurrentBranchClosedOnDefaultBranch.json"))
 
 	output, err := RunCommand("pr status -R OWNER/REPO")
 	if err != nil {
@@ -187,10 +168,7 @@ func TestPRStatus_currentBranch_Closed(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "blueberries")
 	http := initFakeHTTP()
 	http.StubRepoResponse("OWNER", "REPO")
-
-	jsonFile, _ := os.Open("../test/fixtures/prStatusCurrentBranchClosed.json")
-	defer jsonFile.Close()
-	http.StubResponse(200, jsonFile)
+	http.Register(httpmock.GraphQL(`query PullRequestStatus\b`), httpmock.FileResponse("../test/fixtures/prStatusCurrentBranchClosed.json"))
 
 	output, err := RunCommand("pr status")
 	if err != nil {
@@ -208,10 +186,7 @@ func TestPRStatus_currentBranch_Closed_defaultBranch(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "blueberries")
 	http := initFakeHTTP()
 	http.StubRepoResponseWithDefaultBranch("OWNER", "REPO", "blueberries")
-
-	jsonFile, _ := os.Open("../test/fixtures/prStatusCurrentBranchClosedOnDefaultBranch.json")
-	defer jsonFile.Close()
-	http.StubResponse(200, jsonFile)
+	http.Register(httpmock.GraphQL(`query PullRequestStatus\b`), httpmock.FileResponse("../test/fixtures/prStatusCurrentBranchClosedOnDefaultBranch.json"))
 
 	output, err := RunCommand("pr status")
 	if err != nil {
@@ -229,10 +204,7 @@ func TestPRStatus_currentBranch_Merged(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "blueberries")
 	http := initFakeHTTP()
 	http.StubRepoResponse("OWNER", "REPO")
-
-	jsonFile, _ := os.Open("../test/fixtures/prStatusCurrentBranchMerged.json")
-	defer jsonFile.Close()
-	http.StubResponse(200, jsonFile)
+	http.Register(httpmock.GraphQL(`query PullRequestStatus\b`), httpmock.FileResponse("../test/fixtures/prStatusCurrentBranchMerged.json"))
 
 	output, err := RunCommand("pr status")
 	if err != nil {
@@ -250,10 +222,7 @@ func TestPRStatus_currentBranch_Merged_defaultBranch(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "blueberries")
 	http := initFakeHTTP()
 	http.StubRepoResponseWithDefaultBranch("OWNER", "REPO", "blueberries")
-
-	jsonFile, _ := os.Open("../test/fixtures/prStatusCurrentBranchMergedOnDefaultBranch.json")
-	defer jsonFile.Close()
-	http.StubResponse(200, jsonFile)
+	http.Register(httpmock.GraphQL(`query PullRequestStatus\b`), httpmock.FileResponse("../test/fixtures/prStatusCurrentBranchMergedOnDefaultBranch.json"))
 
 	output, err := RunCommand("pr status")
 	if err != nil {
@@ -271,10 +240,7 @@ func TestPRStatus_blankSlate(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "blueberries")
 	http := initFakeHTTP()
 	http.StubRepoResponse("OWNER", "REPO")
-
-	http.StubResponse(200, bytes.NewBufferString(`
-	{ "data": {} }
-	`))
+	http.Register(httpmock.GraphQL(`query PullRequestStatus\b`), httpmock.StringResponse(`{"data": {}}`))
 
 	output, err := RunCommand("pr status")
 	if err != nil {
@@ -303,10 +269,7 @@ func TestPRStatus_detachedHead(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "")
 	http := initFakeHTTP()
 	http.StubRepoResponse("OWNER", "REPO")
-
-	http.StubResponse(200, bytes.NewBufferString(`
-	{ "data": {} }
-	`))
+	http.Register(httpmock.GraphQL(`query PullRequestStatus\b`), httpmock.StringResponse(`{"data": {}}`))
 
 	output, err := RunCommand("pr status")
 	if err != nil {
@@ -333,35 +296,66 @@ Requesting a code review from you
 
 func TestPRList(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(true)()
 	http := initFakeHTTP()
 	http.StubRepoResponse("OWNER", "REPO")
-
-	jsonFile, _ := os.Open("../test/fixtures/prList.json")
-	defer jsonFile.Close()
-	http.StubResponse(200, jsonFile)
+	http.Register(httpmock.GraphQL(`query PullRequestList\b`), httpmock.FileResponse("../test/fixtures/prList.json"))
 
 	output, err := RunCommand("pr list")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	eq(t, output.Stderr(), `
-Showing 3 of 3 pull requests in OWNER/REPO
+	assert.Equal(t, `
+Showing 3 of 3 open pull requests in OWNER/REPO
 
-`)
-	eq(t, output.String(), `32	New feature	feature
-29	Fixed bad bug	hubot:bug-fix
-28	Improve documentation	docs
-`)
+`, output.Stderr())
+
+	lines := strings.Split(output.String(), "\n")
+	res := []*regexp.Regexp{
+		regexp.MustCompile(`#32.*New feature.*feature`),
+		regexp.MustCompile(`#29.*Fixed bad bug.*hubot:bug-fix`),
+		regexp.MustCompile(`#28.*Improve documentation.*docs`),
+	}
+
+	for i, r := range res {
+		if !r.MatchString(lines[i]) {
+			t.Errorf("%s did not match %s", lines[i], r)
+		}
+	}
+}
+
+func TestPRList_nontty(t *testing.T) {
+	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(false)()
+	http := initFakeHTTP()
+	http.StubRepoResponse("OWNER", "REPO")
+	http.Register(httpmock.GraphQL(`query PullRequestList\b`), httpmock.FileResponse("../test/fixtures/prList.json"))
+
+	output, err := RunCommand("pr list")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assert.Equal(t, "", output.Stderr())
+
+	assert.Equal(t, `32	New feature	feature	DRAFT
+29	Fixed bad bug	hubot:bug-fix	OPEN
+28	Improve documentation	docs	MERGED
+`, output.String())
 }
 
 func TestPRList_filtering(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(true)()
 	http := initFakeHTTP()
 	http.StubRepoResponse("OWNER", "REPO")
-
-	respBody := bytes.NewBufferString(`{ "data": {} }`)
-	http.StubResponse(200, respBody)
+	http.Register(
+		httpmock.GraphQL(`query PullRequestList\b`),
+		httpmock.GraphQLQuery(`{}`, func(_ string, params map[string]interface{}) {
+			assert.Equal(t, []interface{}{"OPEN", "CLOSED", "MERGED"}, params["state"].([]interface{}))
+			assert.Equal(t, []interface{}{"one", "two", "three"}, params["labels"].([]interface{}))
+		}))
 
 	output, err := RunCommand(`pr list -s all -l one,two -l three`)
 	if err != nil {
@@ -373,95 +367,75 @@ func TestPRList_filtering(t *testing.T) {
 No pull requests match your search in OWNER/REPO
 
 `)
-
-	bodyBytes, _ := ioutil.ReadAll(http.Requests[1].Body)
-	reqBody := struct {
-		Variables struct {
-			State  []string
-			Labels []string
-		}
-	}{}
-	_ = json.Unmarshal(bodyBytes, &reqBody)
-
-	eq(t, reqBody.Variables.State, []string{"OPEN", "CLOSED", "MERGED"})
-	eq(t, reqBody.Variables.Labels, []string{"one", "two", "three"})
 }
 
 func TestPRList_filteringRemoveDuplicate(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(true)()
 	http := initFakeHTTP()
 	http.StubRepoResponse("OWNER", "REPO")
-
-	jsonFile, _ := os.Open("../test/fixtures/prListWithDuplicates.json")
-	defer jsonFile.Close()
-	http.StubResponse(200, jsonFile)
+	http.Register(
+		httpmock.GraphQL(`query PullRequestList\b`),
+		httpmock.FileResponse("../test/fixtures/prListWithDuplicates.json"))
 
 	output, err := RunCommand("pr list -l one,two")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	eq(t, output.String(), `32	New feature	feature
-29	Fixed bad bug	hubot:bug-fix
-28	Improve documentation	docs
-`)
+	lines := strings.Split(output.String(), "\n")
+
+	res := []*regexp.Regexp{
+		regexp.MustCompile(`#32.*New feature.*feature`),
+		regexp.MustCompile(`#29.*Fixed bad bug.*hubot:bug-fix`),
+		regexp.MustCompile(`#28.*Improve documentation.*docs`),
+	}
+
+	for i, r := range res {
+		if !r.MatchString(lines[i]) {
+			t.Errorf("%s did not match %s", lines[i], r)
+		}
+	}
 }
 
 func TestPRList_filteringClosed(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(true)()
 	http := initFakeHTTP()
 	http.StubRepoResponse("OWNER", "REPO")
-
-	respBody := bytes.NewBufferString(`{ "data": {} }`)
-	http.StubResponse(200, respBody)
+	http.Register(
+		httpmock.GraphQL(`query PullRequestList\b`),
+		httpmock.GraphQLQuery(`{}`, func(_ string, params map[string]interface{}) {
+			assert.Equal(t, []interface{}{"CLOSED", "MERGED"}, params["state"].([]interface{}))
+		}))
 
 	_, err := RunCommand(`pr list -s closed`)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	bodyBytes, _ := ioutil.ReadAll(http.Requests[1].Body)
-	reqBody := struct {
-		Variables struct {
-			State []string
-		}
-	}{}
-	_ = json.Unmarshal(bodyBytes, &reqBody)
-
-	eq(t, reqBody.Variables.State, []string{"CLOSED", "MERGED"})
 }
 
 func TestPRList_filteringAssignee(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(true)()
 	http := initFakeHTTP()
 	http.StubRepoResponse("OWNER", "REPO")
-
-	respBody := bytes.NewBufferString(`{ "data": {} }`)
-	http.StubResponse(200, respBody)
+	http.Register(
+		httpmock.GraphQL(`query PullRequestList\b`),
+		httpmock.GraphQLQuery(`{}`, func(_ string, params map[string]interface{}) {
+			assert.Equal(t, `repo:OWNER/REPO assignee:hubot is:pr sort:created-desc is:merged label:"needs tests" base:"develop"`, params["q"].(string))
+		}))
 
 	_, err := RunCommand(`pr list -s merged -l "needs tests" -a hubot -B develop`)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	bodyBytes, _ := ioutil.ReadAll(http.Requests[1].Body)
-	reqBody := struct {
-		Variables struct {
-			Q string
-		}
-	}{}
-	_ = json.Unmarshal(bodyBytes, &reqBody)
-
-	eq(t, reqBody.Variables.Q, `repo:OWNER/REPO assignee:hubot is:pr sort:created-desc is:merged label:"needs tests" base:"develop"`)
 }
 
 func TestPRList_filteringAssigneeLabels(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "master")
-	http := initFakeHTTP()
-	http.StubRepoResponse("OWNER", "REPO")
-
-	respBody := bytes.NewBufferString(`{ "data": {} }`)
-	http.StubResponse(200, respBody)
+	defer stubTerminal(true)()
+	initFakeHTTP()
 
 	_, err := RunCommand(`pr list -l one,two -a hubot`)
 	if err == nil && err.Error() != "multiple labels with --assignee are not supported" {
@@ -471,8 +445,8 @@ func TestPRList_filteringAssigneeLabels(t *testing.T) {
 
 func TestPRList_withInvalidLimitFlag(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "master")
-	http := initFakeHTTP()
-	http.StubRepoResponse("OWNER", "REPO")
+	defer stubTerminal(true)()
+	initFakeHTTP()
 
 	_, err := RunCommand(`pr list --limit=0`)
 	if err == nil && err.Error() != "invalid limit: 0" {
@@ -480,7 +454,217 @@ func TestPRList_withInvalidLimitFlag(t *testing.T) {
 	}
 }
 
+func TestPRList_web(t *testing.T) {
+	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(true)()
+	http := initFakeHTTP()
+	http.StubRepoResponse("OWNER", "REPO")
+
+	var seenCmd *exec.Cmd
+	restoreCmd := run.SetPrepareCmd(func(cmd *exec.Cmd) run.Runnable {
+		seenCmd = cmd
+		return &test.OutputStub{}
+	})
+	defer restoreCmd()
+
+	output, err := RunCommand("pr list --web -a peter -l bug -l docs -L 10 -s merged -B trunk")
+	if err != nil {
+		t.Errorf("error running command `pr list` with `--web` flag: %v", err)
+	}
+
+	expectedURL := "https://github.com/OWNER/REPO/pulls?q=is%3Apr+is%3Amerged+assignee%3Apeter+label%3Abug+label%3Adocs+base%3Atrunk"
+
+	eq(t, output.String(), "")
+	eq(t, output.Stderr(), "Opening github.com/OWNER/REPO/pulls in your browser.\n")
+
+	if seenCmd == nil {
+		t.Fatal("expected a command to run")
+	}
+	url := seenCmd.Args[len(seenCmd.Args)-1]
+	eq(t, url, expectedURL)
+}
+
+func TestPRView_Preview_nontty(t *testing.T) {
+	defer stubTerminal(false)()
+	tests := map[string]struct {
+		ownerRepo       string
+		args            string
+		fixture         string
+		expectedOutputs []string
+	}{
+		"Open PR without metadata": {
+			ownerRepo: "master",
+			args:      "pr view 12",
+			fixture:   "../test/fixtures/prViewPreview.json",
+			expectedOutputs: []string{
+				`title:\tBlueberries are from a fork\n`,
+				`state:\tOPEN\n`,
+				`author:\tnobody\n`,
+				`labels:\t\n`,
+				`assignees:\t\n`,
+				`reviewers:\t\n`,
+				`projects:\t\n`,
+				`milestone:\t\n`,
+				`blueberries taste good`,
+			},
+		},
+		"Open PR with metadata by number": {
+			ownerRepo: "master",
+			args:      "pr view 12",
+			fixture:   "../test/fixtures/prViewPreviewWithMetadataByNumber.json",
+			expectedOutputs: []string{
+				`title:\tBlueberries are from a fork\n`,
+				`reviewers:\t2 \(Approved\), 3 \(Commented\), 1 \(Requested\)\n`,
+				`assignees:\tmarseilles, monaco\n`,
+				`labels:\tone, two, three, four, five\n`,
+				`projects:\tProject 1 \(column A\), Project 2 \(column B\), Project 3 \(column C\), Project 4 \(Awaiting triage\)\n`,
+				`milestone:\tuluru\n`,
+				`\*\*blueberries taste good\*\*`,
+			},
+		},
+		"Open PR with reviewers by number": {
+			ownerRepo: "master",
+			args:      "pr view 12",
+			fixture:   "../test/fixtures/prViewPreviewWithReviewersByNumber.json",
+			expectedOutputs: []string{
+				`title:\tBlueberries are from a fork\n`,
+				`state:\tOPEN\n`,
+				`author:\tnobody\n`,
+				`labels:\t\n`,
+				`assignees:\t\n`,
+				`projects:\t\n`,
+				`milestone:\t\n`,
+				`reviewers:\tDEF \(Commented\), def \(Changes requested\), ghost \(Approved\), hubot \(Commented\), xyz \(Approved\), 123 \(Requested\), Team 1 \(Requested\), abc \(Requested\)\n`,
+				`\*\*blueberries taste good\*\*`,
+			},
+		},
+		"Open PR with metadata by branch": {
+			ownerRepo: "master",
+			args:      "pr view blueberries",
+			fixture:   "../test/fixtures/prViewPreviewWithMetadataByBranch.json",
+			expectedOutputs: []string{
+				`title:\tBlueberries are a good fruit`,
+				`state:\tOPEN`,
+				`author:\tnobody`,
+				`assignees:\tmarseilles, monaco\n`,
+				`labels:\tone, two, three, four, five\n`,
+				`projects:\tProject 1 \(column A\), Project 2 \(column B\), Project 3 \(column C\)\n`,
+				`milestone:\tuluru\n`,
+				`blueberries taste good`,
+			},
+		},
+		"Open PR for the current branch": {
+			ownerRepo: "blueberries",
+			args:      "pr view",
+			fixture:   "../test/fixtures/prView.json",
+			expectedOutputs: []string{
+				`title:\tBlueberries are a good fruit`,
+				`state:\tOPEN`,
+				`author:\tnobody`,
+				`assignees:\t\n`,
+				`labels:\t\n`,
+				`projects:\t\n`,
+				`milestone:\t\n`,
+				`\*\*blueberries taste good\*\*`,
+			},
+		},
+		"Open PR wth empty body for the current branch": {
+			ownerRepo: "blueberries",
+			args:      "pr view",
+			fixture:   "../test/fixtures/prView_EmptyBody.json",
+			expectedOutputs: []string{
+				`title:\tBlueberries are a good fruit`,
+				`state:\tOPEN`,
+				`author:\tnobody`,
+				`assignees:\t\n`,
+				`labels:\t\n`,
+				`projects:\t\n`,
+				`milestone:\t\n`,
+			},
+		},
+		"Closed PR": {
+			ownerRepo: "master",
+			args:      "pr view 12",
+			fixture:   "../test/fixtures/prViewPreviewClosedState.json",
+			expectedOutputs: []string{
+				`state:\tCLOSED\n`,
+				`author:\tnobody\n`,
+				`labels:\t\n`,
+				`assignees:\t\n`,
+				`reviewers:\t\n`,
+				`projects:\t\n`,
+				`milestone:\t\n`,
+				`\*\*blueberries taste good\*\*`,
+			},
+		},
+		"Merged PR": {
+			ownerRepo: "master",
+			args:      "pr view 12",
+			fixture:   "../test/fixtures/prViewPreviewMergedState.json",
+			expectedOutputs: []string{
+				`state:\tMERGED\n`,
+				`author:\tnobody\n`,
+				`labels:\t\n`,
+				`assignees:\t\n`,
+				`reviewers:\t\n`,
+				`projects:\t\n`,
+				`milestone:\t\n`,
+				`\*\*blueberries taste good\*\*`,
+			},
+		},
+		"Draft PR": {
+			ownerRepo: "master",
+			args:      "pr view 12",
+			fixture:   "../test/fixtures/prViewPreviewDraftState.json",
+			expectedOutputs: []string{
+				`title:\tBlueberries are from a fork\n`,
+				`state:\tDRAFT\n`,
+				`author:\tnobody\n`,
+				`labels:`,
+				`assignees:`,
+				`projects:`,
+				`milestone:`,
+				`\*\*blueberries taste good\*\*`,
+			},
+		},
+		"Draft PR by branch": {
+			ownerRepo: "master",
+			args:      "pr view blueberries",
+			fixture:   "../test/fixtures/prViewPreviewDraftStatebyBranch.json",
+			expectedOutputs: []string{
+				`title:\tBlueberries are a good fruit\n`,
+				`state:\tDRAFT\n`,
+				`author:\tnobody\n`,
+				`labels:`,
+				`assignees:`,
+				`projects:`,
+				`milestone:`,
+				`\*\*blueberries taste good\*\*`,
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			initBlankContext("", "OWNER/REPO", tc.ownerRepo)
+			http := initFakeHTTP()
+			http.StubRepoResponse("OWNER", "REPO")
+			http.Register(httpmock.GraphQL(`query PullRequest(ByNumber|ForBranch)\b`), httpmock.FileResponse(tc.fixture))
+
+			output, err := RunCommand(tc.args)
+			if err != nil {
+				t.Errorf("error running command `%v`: %v", tc.args, err)
+			}
+
+			eq(t, output.Stderr(), "")
+
+			test.ExpectLines(t, output.String(), tc.expectedOutputs...)
+		})
+	}
+}
+
 func TestPRView_Preview(t *testing.T) {
+	defer stubTerminal(true)()
 	tests := map[string]struct {
 		ownerRepo       string
 		args            string
@@ -493,7 +677,7 @@ func TestPRView_Preview(t *testing.T) {
 			fixture:   "../test/fixtures/prViewPreview.json",
 			expectedOutputs: []string{
 				`Blueberries are from a fork`,
-				`Open • nobody wants to merge 12 commits into master from blueberries`,
+				`Open.*nobody wants to merge 12 commits into master from blueberries`,
 				`blueberries taste good`,
 				`View this pull request on GitHub: https://github.com/OWNER/REPO/pull/12`,
 			},
@@ -504,12 +688,12 @@ func TestPRView_Preview(t *testing.T) {
 			fixture:   "../test/fixtures/prViewPreviewWithMetadataByNumber.json",
 			expectedOutputs: []string{
 				`Blueberries are from a fork`,
-				`Open • nobody wants to merge 12 commits into master from blueberries`,
-				`Reviewers: 2 \(Approved\), 3 \(Commented\), 1 \(Requested\)\n`,
-				`Assignees: marseilles, monaco\n`,
-				`Labels: one, two, three, four, five\n`,
-				`Projects: Project 1 \(column A\), Project 2 \(column B\), Project 3 \(column C\), Project 4 \(Awaiting triage\)\n`,
-				`Milestone: uluru\n`,
+				`Open.*nobody wants to merge 12 commits into master from blueberries`,
+				`Reviewers:.*2 \(.*Approved.*\), 3 \(Commented\), 1 \(.*Requested.*\)\n`,
+				`Assignees:.*marseilles, monaco\n`,
+				`Labels:.*one, two, three, four, five\n`,
+				`Projects:.*Project 1 \(column A\), Project 2 \(column B\), Project 3 \(column C\), Project 4 \(Awaiting triage\)\n`,
+				`Milestone:.*uluru\n`,
 				`blueberries taste good`,
 				`View this pull request on GitHub: https://github.com/OWNER/REPO/pull/12\n`,
 			},
@@ -520,7 +704,7 @@ func TestPRView_Preview(t *testing.T) {
 			fixture:   "../test/fixtures/prViewPreviewWithReviewersByNumber.json",
 			expectedOutputs: []string{
 				`Blueberries are from a fork`,
-				`Reviewers: DEF \(Commented\), def \(Changes requested\), ghost \(Approved\), hubot \(Commented\), xyz \(Approved\), 123 \(Requested\), Team 1 \(Requested\), abc \(Requested\)\n`,
+				`Reviewers:.*DEF \(.*Commented.*\), def \(.*Changes requested.*\), ghost \(.*Approved.*\), hubot \(Commented\), xyz \(.*Approved.*\), 123 \(.*Requested.*\), Team 1 \(.*Requested.*\), abc \(.*Requested.*\)\n`,
 				`blueberries taste good`,
 				`View this pull request on GitHub: https://github.com/OWNER/REPO/pull/12\n`,
 			},
@@ -531,11 +715,11 @@ func TestPRView_Preview(t *testing.T) {
 			fixture:   "../test/fixtures/prViewPreviewWithMetadataByBranch.json",
 			expectedOutputs: []string{
 				`Blueberries are a good fruit`,
-				`Open • nobody wants to merge 8 commits into master from blueberries`,
-				`Assignees: marseilles, monaco\n`,
-				`Labels: one, two, three, four, five\n`,
-				`Projects: Project 1 \(column A\), Project 2 \(column B\), Project 3 \(column C\)\n`,
-				`Milestone: uluru\n`,
+				`Open.*nobody wants to merge 8 commits into master from blueberries`,
+				`Assignees:.*marseilles, monaco\n`,
+				`Labels:.*one, two, three, four, five\n`,
+				`Projects:.*Project 1 \(column A\), Project 2 \(column B\), Project 3 \(column C\)\n`,
+				`Milestone:.*uluru\n`,
 				`blueberries taste good`,
 				`View this pull request on GitHub: https://github.com/OWNER/REPO/pull/10\n`,
 			},
@@ -546,7 +730,7 @@ func TestPRView_Preview(t *testing.T) {
 			fixture:   "../test/fixtures/prView.json",
 			expectedOutputs: []string{
 				`Blueberries are a good fruit`,
-				`Open • nobody wants to merge 8 commits into master from blueberries`,
+				`Open.*nobody wants to merge 8 commits into master from blueberries`,
 				`blueberries taste good`,
 				`View this pull request on GitHub: https://github.com/OWNER/REPO/pull/10`,
 			},
@@ -557,7 +741,7 @@ func TestPRView_Preview(t *testing.T) {
 			fixture:   "../test/fixtures/prView_EmptyBody.json",
 			expectedOutputs: []string{
 				`Blueberries are a good fruit`,
-				`Open • nobody wants to merge 8 commits into master from blueberries`,
+				`Open.*nobody wants to merge 8 commits into master from blueberries`,
 				`View this pull request on GitHub: https://github.com/OWNER/REPO/pull/10`,
 			},
 		},
@@ -567,7 +751,7 @@ func TestPRView_Preview(t *testing.T) {
 			fixture:   "../test/fixtures/prViewPreviewClosedState.json",
 			expectedOutputs: []string{
 				`Blueberries are from a fork`,
-				`Closed • nobody wants to merge 12 commits into master from blueberries`,
+				`Closed.*nobody wants to merge 12 commits into master from blueberries`,
 				`blueberries taste good`,
 				`View this pull request on GitHub: https://github.com/OWNER/REPO/pull/12`,
 			},
@@ -578,7 +762,7 @@ func TestPRView_Preview(t *testing.T) {
 			fixture:   "../test/fixtures/prViewPreviewMergedState.json",
 			expectedOutputs: []string{
 				`Blueberries are from a fork`,
-				`Merged • nobody wants to merge 12 commits into master from blueberries`,
+				`Merged.*nobody wants to merge 12 commits into master from blueberries`,
 				`blueberries taste good`,
 				`View this pull request on GitHub: https://github.com/OWNER/REPO/pull/12`,
 			},
@@ -589,7 +773,7 @@ func TestPRView_Preview(t *testing.T) {
 			fixture:   "../test/fixtures/prViewPreviewDraftState.json",
 			expectedOutputs: []string{
 				`Blueberries are from a fork`,
-				`Draft • nobody wants to merge 12 commits into master from blueberries`,
+				`Draft.*nobody wants to merge 12 commits into master from blueberries`,
 				`blueberries taste good`,
 				`View this pull request on GitHub: https://github.com/OWNER/REPO/pull/12`,
 			},
@@ -600,7 +784,7 @@ func TestPRView_Preview(t *testing.T) {
 			fixture:   "../test/fixtures/prViewPreviewDraftStatebyBranch.json",
 			expectedOutputs: []string{
 				`Blueberries are a good fruit`,
-				`Draft • nobody wants to merge 8 commits into master from blueberries`,
+				`Draft.*nobody wants to merge 8 commits into master from blueberries`,
 				`blueberries taste good`,
 				`View this pull request on GitHub: https://github.com/OWNER/REPO/pull/10`,
 			},
@@ -612,10 +796,7 @@ func TestPRView_Preview(t *testing.T) {
 			initBlankContext("", "OWNER/REPO", tc.ownerRepo)
 			http := initFakeHTTP()
 			http.StubRepoResponse("OWNER", "REPO")
-
-			jsonFile, _ := os.Open(tc.fixture)
-			defer jsonFile.Close()
-			http.StubResponse(200, jsonFile)
+			http.Register(httpmock.GraphQL(`query PullRequest(ByNumber|ForBranch)\b`), httpmock.FileResponse(tc.fixture))
 
 			output, err := RunCommand(tc.args)
 			if err != nil {
@@ -631,12 +812,10 @@ func TestPRView_Preview(t *testing.T) {
 
 func TestPRView_web_currentBranch(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "blueberries")
+	defer stubTerminal(true)()
 	http := initFakeHTTP()
 	http.StubRepoResponse("OWNER", "REPO")
-
-	jsonFile, _ := os.Open("../test/fixtures/prView.json")
-	defer jsonFile.Close()
-	http.StubResponse(200, jsonFile)
+	http.Register(httpmock.GraphQL(`query PullRequestForBranch\b`), httpmock.FileResponse("../test/fixtures/prView.json"))
 
 	var seenCmd *exec.Cmd
 	restoreCmd := run.SetPrepareCmd(func(cmd *exec.Cmd) run.Runnable {
@@ -669,12 +848,10 @@ func TestPRView_web_currentBranch(t *testing.T) {
 
 func TestPRView_web_noResultsForBranch(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "blueberries")
+	defer stubTerminal(true)()
 	http := initFakeHTTP()
 	http.StubRepoResponse("OWNER", "REPO")
-
-	jsonFile, _ := os.Open("../test/fixtures/prView_NoActiveBranch.json")
-	defer jsonFile.Close()
-	http.StubResponse(200, jsonFile)
+	http.Register(httpmock.GraphQL(`query PullRequestForBranch\b`), httpmock.FileResponse("../test/fixtures/prView_NoActiveBranch.json"))
 
 	var seenCmd *exec.Cmd
 	restoreCmd := run.SetPrepareCmd(func(cmd *exec.Cmd) run.Runnable {
@@ -700,6 +877,7 @@ func TestPRView_web_noResultsForBranch(t *testing.T) {
 
 func TestPRView_web_numberArg(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(true)()
 	http := initFakeHTTP()
 	http.StubRepoResponse("OWNER", "REPO")
 
@@ -732,6 +910,7 @@ func TestPRView_web_numberArg(t *testing.T) {
 
 func TestPRView_web_numberArgWithHash(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(true)()
 	http := initFakeHTTP()
 	http.StubRepoResponse("OWNER", "REPO")
 
@@ -764,6 +943,7 @@ func TestPRView_web_numberArgWithHash(t *testing.T) {
 
 func TestPRView_web_urlArg(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(true)()
 	http := initFakeHTTP()
 	http.StubResponse(200, bytes.NewBufferString(`
 		{ "data": { "repository": { "pullRequest": {
@@ -794,6 +974,7 @@ func TestPRView_web_urlArg(t *testing.T) {
 
 func TestPRView_web_branchArg(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(true)()
 	http := initFakeHTTP()
 	http.StubRepoResponse("OWNER", "REPO")
 
@@ -828,6 +1009,7 @@ func TestPRView_web_branchArg(t *testing.T) {
 
 func TestPRView_web_branchWithOwnerArg(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(true)()
 	http := initFakeHTTP()
 	http.StubRepoResponse("OWNER", "REPO")
 
@@ -897,7 +1079,7 @@ func TestPrClose(t *testing.T) {
 
 	http.StubResponse(200, bytes.NewBufferString(`
 		{ "data": { "repository": {
-			"pullRequest": { "number": 96 }
+			"pullRequest": { "number": 96, "title": "The title of the PR" }
 		} } }
 	`))
 
@@ -908,7 +1090,7 @@ func TestPrClose(t *testing.T) {
 		t.Fatalf("error running command `pr close`: %v", err)
 	}
 
-	r := regexp.MustCompile(`Closed pull request #96`)
+	r := regexp.MustCompile(`Closed pull request #96 \(The title of the PR\)`)
 
 	if !r.MatchString(output.Stderr()) {
 		t.Fatalf("output did not match regexp /%s/\n> output\n%q\n", r, output.Stderr())
@@ -922,7 +1104,7 @@ func TestPrClose_alreadyClosed(t *testing.T) {
 
 	http.StubResponse(200, bytes.NewBufferString(`
 		{ "data": { "repository": {
-			"pullRequest": { "number": 101, "closed": true }
+			"pullRequest": { "number": 101, "title": "The title of the PR", "closed": true }
 		} } }
 	`))
 
@@ -933,7 +1115,7 @@ func TestPrClose_alreadyClosed(t *testing.T) {
 		t.Fatalf("error running command `pr close`: %v", err)
 	}
 
-	r := regexp.MustCompile(`Pull request #101 is already closed`)
+	r := regexp.MustCompile(`Pull request #101 \(The title of the PR\) is already closed`)
 
 	if !r.MatchString(output.Stderr()) {
 		t.Fatalf("output did not match regexp /%s/\n> output\n%q\n", r, output.Stderr())
@@ -947,7 +1129,7 @@ func TestPRReopen(t *testing.T) {
 
 	http.StubResponse(200, bytes.NewBufferString(`
 	{ "data": { "repository": {
-		"pullRequest": { "number": 666, "closed": true}
+		"pullRequest": { "number": 666, "title": "The title of the PR", "closed": true}
 	} } }
 	`))
 
@@ -958,7 +1140,7 @@ func TestPRReopen(t *testing.T) {
 		t.Fatalf("error running command `pr reopen`: %v", err)
 	}
 
-	r := regexp.MustCompile(`Reopened pull request #666`)
+	r := regexp.MustCompile(`Reopened pull request #666 \(The title of the PR\)`)
 
 	if !r.MatchString(output.Stderr()) {
 		t.Fatalf("output did not match regexp /%s/\n> output\n%q\n", r, output.Stderr())
@@ -972,7 +1154,7 @@ func TestPRReopen_alreadyOpen(t *testing.T) {
 
 	http.StubResponse(200, bytes.NewBufferString(`
 	{ "data": { "repository": {
-		"pullRequest": { "number": 666, "closed": false}
+		"pullRequest": { "number": 666,  "title": "The title of the PR", "closed": false}
 	} } }
 	`))
 
@@ -983,7 +1165,7 @@ func TestPRReopen_alreadyOpen(t *testing.T) {
 		t.Fatalf("error running command `pr reopen`: %v", err)
 	}
 
-	r := regexp.MustCompile(`Pull request #666 is already open`)
+	r := regexp.MustCompile(`Pull request #666 \(The title of the PR\) is already open`)
 
 	if !r.MatchString(output.Stderr()) {
 		t.Fatalf("output did not match regexp /%s/\n> output\n%q\n", r, output.Stderr())
@@ -997,7 +1179,7 @@ func TestPRReopen_alreadyMerged(t *testing.T) {
 
 	http.StubResponse(200, bytes.NewBufferString(`
 	{ "data": { "repository": {
-		"pullRequest": { "number": 666, "closed": true, "state": "MERGED"}
+		"pullRequest": { "number": 666, "title": "The title of the PR", "closed": true, "state": "MERGED"}
 	} } }
 	`))
 
@@ -1008,36 +1190,39 @@ func TestPRReopen_alreadyMerged(t *testing.T) {
 		t.Fatalf("expected an error running command `pr reopen`: %v", err)
 	}
 
-	r := regexp.MustCompile(`Pull request #666 can't be reopened because it was already merged`)
+	r := regexp.MustCompile(`Pull request #666 \(The title of the PR\) can't be reopened because it was already merged`)
 
 	if !r.MatchString(err.Error()) {
 		t.Fatalf("output did not match regexp /%s/\n> output\n%q\n", r, output.Stderr())
 	}
 }
 
-type stubResponse struct {
-	ResponseCode int
-	ResponseBody io.Reader
-}
-
-func initWithStubs(branch string, stubs ...stubResponse) {
-	initBlankContext("", "OWNER/REPO", branch)
-	http := initFakeHTTP()
-	http.StubRepoResponse("OWNER", "REPO")
-	for _, s := range stubs {
-		http.StubResponse(s.ResponseCode, s.ResponseBody)
-	}
-	http.StubRepoResponse("OWNER", "REPO")
-}
-
 func TestPrMerge(t *testing.T) {
-	initWithStubs("master",
-		stubResponse{200, bytes.NewBufferString(`{ "data": { "repository": {
-			"pullRequest": { "number": 1, "closed": false, "state": "OPEN"}
-		} } }`)},
-		stubResponse{200, bytes.NewBufferString(`{"id": "THE-ID"}`)},
-		stubResponse{200, bytes.NewBufferString(`{"node_id": "THE-ID"}`)},
-	)
+	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(true)()
+	http := initFakeHTTP()
+	defer http.Verify(t)
+	http.StubRepoResponse("OWNER", "REPO")
+	http.Register(
+		httpmock.GraphQL(`query PullRequestByNumber\b`),
+		httpmock.StringResponse(`
+		{ "data": { "repository": { "pullRequest": {
+			"id": "THE-ID",
+			"number": 1,
+			"title": "The title of the PR",
+			"state": "OPEN",
+			"headRefName": "blueberries",
+			"headRepositoryOwner": {"login": "OWNER"}
+		} } } }`))
+	http.Register(
+		httpmock.GraphQL(`mutation PullRequestMerge\b`),
+		httpmock.GraphQLMutation(`{}`, func(input map[string]interface{}) {
+			assert.Equal(t, "THE-ID", input["pullRequestId"].(string))
+			assert.Equal(t, "MERGE", input["mergeMethod"].(string))
+		}))
+	http.Register(
+		httpmock.REST("DELETE", "repos/OWNER/REPO/git/refs/heads/blueberries"),
+		httpmock.StringResponse(`{}`))
 
 	cs, cmdTeardown := test.InitCmdStubber()
 	defer cmdTeardown()
@@ -1053,22 +1238,102 @@ func TestPrMerge(t *testing.T) {
 		t.Fatalf("error running command `pr merge`: %v", err)
 	}
 
-	r := regexp.MustCompile(`Merged pull request #1`)
+	r := regexp.MustCompile(`Merged pull request #1 \(The title of the PR\)`)
 
-	if !r.MatchString(output.String()) {
+	if !r.MatchString(output.Stderr()) {
 		t.Fatalf("output did not match regexp /%s/\n> output\n%q\n", r, output.Stderr())
 	}
 }
 
+func TestPrMerge_nontty(t *testing.T) {
+	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(false)()
+	http := initFakeHTTP()
+	http.StubRepoResponse("OWNER", "REPO")
+	http.Register(
+		httpmock.GraphQL(`query PullRequestByNumber\b`),
+		httpmock.StringResponse(`
+		{ "data": { "repository": {
+			"pullRequest": { "number": 1, "title": "The title of the PR", "state": "OPEN", "id": "THE-ID"}
+		} } }`))
+	http.Register(
+		httpmock.GraphQL(`mutation PullRequestMerge\b`),
+		httpmock.GraphQLMutation(`{}`, func(input map[string]interface{}) {
+			assert.Equal(t, "THE-ID", input["pullRequestId"].(string))
+			assert.Equal(t, "MERGE", input["mergeMethod"].(string))
+		}))
+	http.Register(
+		httpmock.GraphQL(`query RepositoryInfo\b`),
+		httpmock.StringResponse(`{
+			"data": {
+				"repository": {
+					"defaultBranchRef": {"name": "master"}
+				}
+			}
+		}`))
+	http.Register(
+		httpmock.REST("DELETE", "repos/OWNER/REPO/git/refs/heads/blueberries"),
+		httpmock.StringResponse(`{}`))
+
+	cs, cmdTeardown := test.InitCmdStubber()
+	defer cmdTeardown()
+
+	cs.Stub("branch.blueberries.remote origin\nbranch.blueberries.merge refs/heads/blueberries") // git config --get-regexp ^branch\.master\.(remote|merge)
+	cs.Stub("")                                                                                  // git config --get-regexp ^branch\.blueberries\.(remote|merge)$
+	cs.Stub("")                                                                                  // git symbolic-ref --quiet --short HEAD
+	cs.Stub("")                                                                                  // git checkout master
+	cs.Stub("")
+
+	output, err := RunCommand("pr merge 1 --merge")
+	if err != nil {
+		t.Fatalf("error running command `pr merge`: %v", err)
+	}
+
+	assert.Equal(t, "", output.String())
+	assert.Equal(t, "", output.Stderr())
+}
+
+func TestPrMerge_nontty_insufficient_flags(t *testing.T) {
+	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(false)()
+	http := initFakeHTTP()
+	http.StubRepoResponse("OWNER", "REPO")
+	http.Register(
+		httpmock.GraphQL(`query PullRequestByNumber\b`),
+		httpmock.StringResponse(`
+		{ "data": { "repository": {
+			"pullRequest": { "number": 1, "title": "The title of the PR", "state": "OPEN", "id": "THE-ID"}
+		} } }`))
+
+	output, err := RunCommand("pr merge 1")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	assert.Equal(t, "--merge, --rebase, or --squash required when not attached to a tty", err.Error())
+	assert.Equal(t, "", output.String())
+}
+
 func TestPrMerge_withRepoFlag(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(true)()
 	http := initFakeHTTP()
-	http.StubResponse(200, bytes.NewBufferString(`{ "data": { "repository": {
-		"pullRequest": { "number": 1, "closed": false, "state": "OPEN"}
-		} } }`))
-	http.StubResponse(200, bytes.NewBufferString(`{ "data": {} }`))
-	http.StubRepoResponse("OWNER", "REPO")
-	http.StubResponse(200, bytes.NewBufferString(`{"node_id": "THE-ID"}`))
+	defer http.Verify(t)
+	http.Register(
+		httpmock.GraphQL(`query PullRequestByNumber\b`),
+		httpmock.GraphQLQuery(`
+		{ "data": { "repository": {
+			"pullRequest": { "number": 1, "title": "The title of the PR", "state": "OPEN", "id": "THE-ID"}
+		} } }`, func(_ string, params map[string]interface{}) {
+			assert.Equal(t, "stinky", params["owner"].(string))
+			assert.Equal(t, "boi", params["repo"].(string))
+		}))
+	http.Register(
+		httpmock.GraphQL(`mutation PullRequestMerge\b`),
+		httpmock.GraphQLMutation(`{}`, func(input map[string]interface{}) {
+			assert.Equal(t, "THE-ID", input["pullRequestId"].(string))
+			assert.Equal(t, "MERGE", input["mergeMethod"].(string))
+		}))
 
 	cs, cmdTeardown := test.InitCmdStubber()
 	defer cmdTeardown()
@@ -1080,22 +1345,31 @@ func TestPrMerge_withRepoFlag(t *testing.T) {
 		t.Fatalf("error running command `pr merge`: %v", err)
 	}
 
-	r := regexp.MustCompile(`Merged pull request #1`)
+	r := regexp.MustCompile(`Merged pull request #1 \(The title of the PR\)`)
 
-	if !r.MatchString(output.String()) {
+	if !r.MatchString(output.Stderr()) {
 		t.Fatalf("output did not match regexp /%s/\n> output\n%q\n", r, output.Stderr())
 	}
 }
 
 func TestPrMerge_deleteBranch(t *testing.T) {
-	initWithStubs("blueberries",
-		stubResponse{200, bytes.NewBufferString(`
-		{ "data": { "repository": { "pullRequests": { "nodes": [
-			{ "headRefName": "blueberries", "id": "THE-ID", "number": 3}
-		] } } } }`)},
-		stubResponse{200, bytes.NewBufferString(`{ "data": {} }`)},
-		stubResponse{200, bytes.NewBufferString(`{"node_id": "THE-ID"}`)},
-	)
+	initBlankContext("", "OWNER/REPO", "blueberries")
+	defer stubTerminal(true)()
+	http := initFakeHTTP()
+	defer http.Verify(t)
+	http.StubRepoResponse("OWNER", "REPO")
+	http.Register(
+		httpmock.GraphQL(`query PullRequestForBranch\b`),
+		httpmock.FileResponse("../test/fixtures/prViewPreviewWithMetadataByBranch.json"))
+	http.Register(
+		httpmock.GraphQL(`mutation PullRequestMerge\b`),
+		httpmock.GraphQLMutation(`{}`, func(input map[string]interface{}) {
+			assert.Equal(t, "PR_10", input["pullRequestId"].(string))
+			assert.Equal(t, "MERGE", input["mergeMethod"].(string))
+		}))
+	http.Register(
+		httpmock.REST("DELETE", "repos/OWNER/REPO/git/refs/heads/blueberries"),
+		httpmock.StringResponse(`{}`))
 
 	cs, cmdTeardown := test.InitCmdStubber()
 	defer cmdTeardown()
@@ -1111,20 +1385,27 @@ func TestPrMerge_deleteBranch(t *testing.T) {
 		t.Fatalf("Got unexpected error running `pr merge` %s", err)
 	}
 
-	test.ExpectLines(t, output.String(), "Merged pull request #3", "Deleted branch blueberries")
+	test.ExpectLines(t, output.Stderr(), `Merged pull request #10 \(Blueberries are a good fruit\)`, `Deleted branch.*blueberries`)
 }
 
 func TestPrMerge_deleteNonCurrentBranch(t *testing.T) {
 	initBlankContext("", "OWNER/REPO", "another-branch")
+	defer stubTerminal(true)()
 	http := initFakeHTTP()
+	defer http.Verify(t)
 	http.StubRepoResponse("OWNER", "REPO")
-	http.StubResponse(200, bytes.NewBufferString(`
-	{ "data": { "repository": { "pullRequests": { "nodes": [
-		{ "headRefName": "blueberries", "id": "THE-ID", "number": 3}
-	] } } } }`))
-	http.StubResponse(200, bytes.NewBufferString(`{ "data": {} }`))
-	http.StubResponse(200, bytes.NewBufferString(`{"node_id": "THE-ID"}`))
-	http.StubRepoResponse("OWNER", "REPO")
+	http.Register(
+		httpmock.GraphQL(`query PullRequestForBranch\b`),
+		httpmock.FileResponse("../test/fixtures/prViewPreviewWithMetadataByBranch.json"))
+	http.Register(
+		httpmock.GraphQL(`mutation PullRequestMerge\b`),
+		httpmock.GraphQLMutation(`{}`, func(input map[string]interface{}) {
+			assert.Equal(t, "PR_10", input["pullRequestId"].(string))
+			assert.Equal(t, "MERGE", input["mergeMethod"].(string))
+		}))
+	http.Register(
+		httpmock.REST("DELETE", "repos/OWNER/REPO/git/refs/heads/blueberries"),
+		httpmock.StringResponse(`{}`))
 
 	cs, cmdTeardown := test.InitCmdStubber()
 	defer cmdTeardown()
@@ -1138,10 +1419,28 @@ func TestPrMerge_deleteNonCurrentBranch(t *testing.T) {
 		t.Fatalf("Got unexpected error running `pr merge` %s", err)
 	}
 
-	test.ExpectLines(t, output.String(), "Merged pull request #3", "Deleted branch blueberries")
+	test.ExpectLines(t, output.Stderr(), `Merged pull request #10 \(Blueberries are a good fruit\)`, `Deleted branch.*blueberries`)
 }
 
 func TestPrMerge_noPrNumberGiven(t *testing.T) {
+	initBlankContext("", "OWNER/REPO", "blueberries")
+	defer stubTerminal(true)()
+	http := initFakeHTTP()
+	defer http.Verify(t)
+	http.StubRepoResponse("OWNER", "REPO")
+	http.Register(
+		httpmock.GraphQL(`query PullRequestForBranch\b`),
+		httpmock.FileResponse("../test/fixtures/prViewPreviewWithMetadataByBranch.json"))
+	http.Register(
+		httpmock.GraphQL(`mutation PullRequestMerge\b`),
+		httpmock.GraphQLMutation(`{}`, func(input map[string]interface{}) {
+			assert.Equal(t, "PR_10", input["pullRequestId"].(string))
+			assert.Equal(t, "MERGE", input["mergeMethod"].(string))
+		}))
+	http.Register(
+		httpmock.REST("DELETE", "repos/OWNER/REPO/git/refs/heads/blueberries"),
+		httpmock.StringResponse(`{}`))
+
 	cs, cmdTeardown := test.InitCmdStubber()
 	defer cmdTeardown()
 
@@ -1151,35 +1450,44 @@ func TestPrMerge_noPrNumberGiven(t *testing.T) {
 	cs.Stub("")                                                                                  // git checkout master
 	cs.Stub("")                                                                                  // git branch -d
 
-	jsonFile, _ := os.Open("../test/fixtures/prViewPreviewWithMetadataByBranch.json")
-	defer jsonFile.Close()
-
-	initWithStubs("blueberries",
-		stubResponse{200, jsonFile},
-		stubResponse{200, bytes.NewBufferString(`{"id": "THE-ID"}`)},
-		stubResponse{200, bytes.NewBufferString(`{"node_id": "THE-ID"}`)},
-	)
-
 	output, err := RunCommand("pr merge --merge")
 	if err != nil {
 		t.Fatalf("error running command `pr merge`: %v", err)
 	}
 
-	r := regexp.MustCompile(`Merged pull request #10`)
+	r := regexp.MustCompile(`Merged pull request #10 \(Blueberries are a good fruit\)`)
 
-	if !r.MatchString(output.String()) {
+	if !r.MatchString(output.Stderr()) {
 		t.Fatalf("output did not match regexp /%s/\n> output\n%q\n", r, output.Stderr())
 	}
 }
 
 func TestPrMerge_rebase(t *testing.T) {
-	initWithStubs("master",
-		stubResponse{200, bytes.NewBufferString(`{ "data": { "repository": {
-			"pullRequest": { "number": 2, "closed": false, "state": "OPEN"}
-		} } }`)},
-		stubResponse{200, bytes.NewBufferString(`{"id": "THE-ID"}`)},
-		stubResponse{200, bytes.NewBufferString(`{"node_id": "THE-ID"}`)},
-	)
+	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(true)()
+	http := initFakeHTTP()
+	defer http.Verify(t)
+	http.StubRepoResponse("OWNER", "REPO")
+	http.Register(
+		httpmock.GraphQL(`query PullRequestByNumber\b`),
+		httpmock.StringResponse(`
+		{ "data": { "repository": { "pullRequest": {
+			"id": "THE-ID",
+			"number": 2,
+			"title": "The title of the PR",
+			"state": "OPEN",
+			"headRefName": "blueberries",
+			"headRepositoryOwner": {"login": "OWNER"}
+		} } } }`))
+	http.Register(
+		httpmock.GraphQL(`mutation PullRequestMerge\b`),
+		httpmock.GraphQLMutation(`{}`, func(input map[string]interface{}) {
+			assert.Equal(t, "THE-ID", input["pullRequestId"].(string))
+			assert.Equal(t, "REBASE", input["mergeMethod"].(string))
+		}))
+	http.Register(
+		httpmock.REST("DELETE", "repos/OWNER/REPO/git/refs/heads/blueberries"),
+		httpmock.StringResponse(`{}`))
 
 	cs, cmdTeardown := test.InitCmdStubber()
 	defer cmdTeardown()
@@ -1194,21 +1502,39 @@ func TestPrMerge_rebase(t *testing.T) {
 		t.Fatalf("error running command `pr merge`: %v", err)
 	}
 
-	r := regexp.MustCompile(`Rebased and merged pull request #2`)
+	r := regexp.MustCompile(`Rebased and merged pull request #2 \(The title of the PR\)`)
 
-	if !r.MatchString(output.String()) {
+	if !r.MatchString(output.Stderr()) {
 		t.Fatalf("output did not match regexp /%s/\n> output\n%q\n", r, output.Stderr())
 	}
 }
 
 func TestPrMerge_squash(t *testing.T) {
-	initWithStubs("master",
-		stubResponse{200, bytes.NewBufferString(`{ "data": { "repository": {
-			"pullRequest": { "number": 3, "closed": false, "state": "OPEN"}
-		} } }`)},
-		stubResponse{200, bytes.NewBufferString(`{"id": "THE-ID"}`)},
-		stubResponse{200, bytes.NewBufferString(`{"node_id": "THE-ID"}`)},
-	)
+	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(true)()
+	http := initFakeHTTP()
+	defer http.Verify(t)
+	http.StubRepoResponse("OWNER", "REPO")
+	http.Register(
+		httpmock.GraphQL(`query PullRequestByNumber\b`),
+		httpmock.StringResponse(`
+		{ "data": { "repository": { "pullRequest": {
+			"id": "THE-ID",
+			"number": 3,
+			"title": "The title of the PR",
+			"state": "OPEN",
+			"headRefName": "blueberries",
+			"headRepositoryOwner": {"login": "OWNER"}
+		} } } }`))
+	http.Register(
+		httpmock.GraphQL(`mutation PullRequestMerge\b`),
+		httpmock.GraphQLMutation(`{}`, func(input map[string]interface{}) {
+			assert.Equal(t, "THE-ID", input["pullRequestId"].(string))
+			assert.Equal(t, "SQUASH", input["mergeMethod"].(string))
+		}))
+	http.Register(
+		httpmock.REST("DELETE", "repos/OWNER/REPO/git/refs/heads/blueberries"),
+		httpmock.StringResponse(`{}`))
 
 	cs, cmdTeardown := test.InitCmdStubber()
 	defer cmdTeardown()
@@ -1223,21 +1549,21 @@ func TestPrMerge_squash(t *testing.T) {
 		t.Fatalf("error running command `pr merge`: %v", err)
 	}
 
-	r := regexp.MustCompile(`Squashed and merged pull request #3`)
-
-	if !r.MatchString(output.String()) {
-		t.Fatalf("output did not match regexp /%s/\n> output\n%q\n", r, output.Stderr())
-	}
+	test.ExpectLines(t, output.Stderr(), "Squashed and merged pull request #3", `Deleted branch.*blueberries`)
 }
 
 func TestPrMerge_alreadyMerged(t *testing.T) {
-	initWithStubs("master",
-		stubResponse{200, bytes.NewBufferString(`{ "data": { "repository": {
-			"pullRequest": { "number": 4, "closed": true, "state": "MERGED"}
-		} } }`)},
-		stubResponse{200, bytes.NewBufferString(`{"id": "THE-ID"}`)},
-		stubResponse{200, bytes.NewBufferString(`{"node_id": "THE-ID"}`)},
-	)
+	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(true)()
+	http := initFakeHTTP()
+	defer http.Verify(t)
+	http.StubRepoResponse("OWNER", "REPO")
+	http.Register(
+		httpmock.GraphQL(`query PullRequestByNumber\b`),
+		httpmock.StringResponse(`
+		{ "data": { "repository": {
+			"pullRequest": { "number": 4, "title": "The title of the PR", "state": "MERGED"}
+		} } }`))
 
 	cs, cmdTeardown := test.InitCmdStubber()
 	defer cmdTeardown()
@@ -1252,7 +1578,7 @@ func TestPrMerge_alreadyMerged(t *testing.T) {
 		t.Fatalf("expected an error running command `pr merge`: %v", err)
 	}
 
-	r := regexp.MustCompile(`Pull request #4 was already merged`)
+	r := regexp.MustCompile(`Pull request #4 \(The title of the PR\) was already merged`)
 
 	if !r.MatchString(err.Error()) {
 		t.Fatalf("output did not match regexp /%s/\n> output\n%q\n", r, output.Stderr())
@@ -1260,13 +1586,29 @@ func TestPrMerge_alreadyMerged(t *testing.T) {
 }
 
 func TestPRMerge_interactive(t *testing.T) {
-	initWithStubs("blueberries",
-		stubResponse{200, bytes.NewBufferString(`
-		{ "data": { "repository": { "pullRequests": { "nodes": [
-			{ "headRefName": "blueberries", "headRepositoryOwner": {"login": "OWNER"}, "id": "THE-ID", "number": 3}
-		] } } } }`)},
-		stubResponse{200, bytes.NewBufferString(`{"node_id": "THE-ID"}`)},
-		stubResponse{200, bytes.NewBufferString(`{ "data": {} }`)})
+	initBlankContext("", "OWNER/REPO", "blueberries")
+	defer stubTerminal(true)()
+	http := initFakeHTTP()
+	defer http.Verify(t)
+	http.StubRepoResponse("OWNER", "REPO")
+	http.Register(
+		httpmock.GraphQL(`query PullRequestForBranch\b`),
+		httpmock.StringResponse(`
+		{ "data": { "repository": { "pullRequests": { "nodes": [{
+			"headRefName": "blueberries",
+			"headRepositoryOwner": {"login": "OWNER"},
+			"id": "THE-ID",
+			"number": 3
+		}] } } } }`))
+	http.Register(
+		httpmock.GraphQL(`mutation PullRequestMerge\b`),
+		httpmock.GraphQLMutation(`{}`, func(input map[string]interface{}) {
+			assert.Equal(t, "THE-ID", input["pullRequestId"].(string))
+			assert.Equal(t, "MERGE", input["mergeMethod"].(string))
+		}))
+	http.Register(
+		httpmock.REST("DELETE", "repos/OWNER/REPO/git/refs/heads/blueberries"),
+		httpmock.StringResponse(`{}`))
 
 	cs, cmdTeardown := test.InitCmdStubber()
 	defer cmdTeardown()
@@ -1277,10 +1619,10 @@ func TestPRMerge_interactive(t *testing.T) {
 	cs.Stub("") // git push origin --delete blueberries
 	cs.Stub("") // git branch -d
 
-	as, surveyTeardown := initAskStubber()
+	as, surveyTeardown := prompt.InitAskStubber()
 	defer surveyTeardown()
 
-	as.Stub([]*QuestionStub{
+	as.Stub([]*prompt.QuestionStub{
 		{
 			Name:  "mergeMethod",
 			Value: 0,
@@ -1296,16 +1638,22 @@ func TestPRMerge_interactive(t *testing.T) {
 		t.Fatalf("Got unexpected error running `pr merge` %s", err)
 	}
 
-	test.ExpectLines(t, output.String(), "Merged pull request #3", "Deleted branch blueberries")
+	test.ExpectLines(t, output.Stderr(), "Merged pull request #3", `Deleted branch.*blueberries`)
 }
 
 func TestPrMerge_multipleMergeMethods(t *testing.T) {
-	initWithStubs("master",
-		stubResponse{200, bytes.NewBufferString(`{ "data": { "repository": {
-			"pullRequest": { "number": 1, "closed": false, "state": "OPEN"}
-		} } }`)},
-		stubResponse{200, bytes.NewBufferString(`{"id": "THE-ID"}`)},
-	)
+	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(true)()
+
+	_, err := RunCommand("pr merge 1 --merge --squash")
+	if err == nil {
+		t.Fatal("expected error running `pr merge` with multiple merge methods")
+	}
+}
+
+func TestPrMerge_multipleMergeMethods_nontty(t *testing.T) {
+	initBlankContext("", "OWNER/REPO", "master")
+	defer stubTerminal(false)()
 
 	_, err := RunCommand("pr merge 1 --merge --squash")
 	if err == nil {
